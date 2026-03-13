@@ -22,7 +22,7 @@ namespace VehicleModulesSystem
             dataPath = Path.Combine(Directory, "VehicleData.json");
             LoadData();
 
-            VehicleManager.onVehicleSpawned += OnVehicleSpawned;
+            VehicleManager.onVehicleAssetSpawned += OnVehicleSpawned;
             foreach (var v in VehicleManager.vehicles) AddTracker(v);
         }
 
@@ -38,7 +38,7 @@ namespace VehicleModulesSystem
         protected override void Unload()
         {
             SaveData();
-            VehicleManager.onVehicleSpawned -= OnVehicleSpawned;
+            VehicleManager.onVehicleAssetSpawned -= OnVehicleSpawned;
         }
 
         public override TranslationList DefaultTranslations => new TranslationList
