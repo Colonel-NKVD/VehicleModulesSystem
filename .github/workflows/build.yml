@@ -1,27 +1,27 @@
 name: Build VehicleModulesSystem
 
-on:
-  push:
-    branches: [ "main" ]
+on: [push]
 
 jobs:
   build:
-    runs-on: windows-latest
-
+    runs-on: windows-2022
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+
+    - name: Setup NuGet
+      uses: NuGet/setup-nuget@v1
 
     - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v1.1
+      uses: microsoft/setup-msbuild@v2
 
-    # Шаг NuGet убираем или оставляем пустым, если нет других зависимостей
-    
-    - name: Build Plugin
-      run: msbuild VehicleModulesSystem.csproj /p:Configuration=Release
+    - name: Restore NuGet Packages
+      run: nuget restore VehicleModulesSystem.csproj
 
-    - name: Upload Artifact
+    - name: Build
+      run: msbuild VehicleModulesSystem.csproj /p:Configuration=Release /p:TargetFramework=net48
+
+    - name: Upload DLL
       uses: actions/upload-artifact@v4
       with:
-        name: VehicleModulesSystem-v7.0
-        path: bin/Release/VehicleModulesSystem.dll
+        name: VehicleModulesSystem-Release
+        path: bin/Release/net48/VehicleModulesSystem.dll
