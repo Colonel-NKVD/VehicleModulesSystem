@@ -1,5 +1,6 @@
 using Rocket.Unturned;
 using Rocket.Core.Plugins;
+using Rocket.Unturned.Events; // Важно для событий
 using SDG.Unturned;
 using UnityEngine;
 using System.Collections.Generic;
@@ -10,24 +11,26 @@ namespace VehicleModulesSystem
     public class VehicleModulesPlugin : RocketPlugin<VehicleModulesConfiguration>
     {
         public static VehicleModulesPlugin Instance;
-        
+
+        // Эти поля необходимы для работы твоего VehicleTracker.cs
         public Dictionary<uint, Dictionary<string, float>> SavedVehicleData = new Dictionary<uint, Dictionary<string, float>>();
         public bool IsDirty = false;
 
         protected override void Load()
         {
             Instance = this;
-            // Подписываемся на событие через координаты
-            VehicleManager.onVehicleRegionAdded += OnVehicleSpawned;
+
+            // Используем событие RocketMod — оно стабильнее
+            UnturnedVehicleEvents.OnVehicleSpawned += OnVehicleSpawned;
         }
 
         protected override void Unload()
         {
-            VehicleManager.onVehicleRegionAdded -= OnVehicleSpawned;
+            UnturnedVehicleEvents.OnVehicleSpawned -= OnVehicleSpawned;
         }
 
-        // Исправлено: принимаем byte x, byte y вместо VehicleRegion
-        private void OnVehicleSpawned(byte x, byte y, InteractableVehicle vehicle)
+        // Сигнатура RocketMod принимает только сам транспорт
+        private void OnVehicleSpawned(InteractableVehicle vehicle)
         {
             if (vehicle != null && vehicle.gameObject.GetComponent<VehicleTracker>() == null)
             {
@@ -35,6 +38,7 @@ namespace VehicleModulesSystem
             }
         }
 
+        // Переводы, которые запрашивает трекер
         public override TranslationList DefaultTranslations => new TranslationList
         {
             { "Status_Perfect", "Исправен" },
