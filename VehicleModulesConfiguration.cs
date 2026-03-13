@@ -2,7 +2,7 @@ using Rocket.API;
 
 namespace VehicleModulesSystem
 {
-    public class VehicleModulesConfig : IRocketPluginConfiguration
+    public class VehicleModulesConfiguration : IRocketPluginConfiguration
     {
         public ushort MinDamageThreshold;
         public float FireDamage;
@@ -12,12 +12,11 @@ namespace VehicleModulesSystem
         public ushort BarricadeRepairID;
         public float RepairRadius;
         
-        // Новые параметры v7.0
-        public float ChainReactionChance; // Шанс, что утечка топлива вызовет пожар
-        public float SaveInterval; // Интервал автосохранения (сек)
+        public float ChainReactionChance; 
+        public float SaveInterval; 
         public bool EnableCameraShake;
 
-        public void LoadDefaults()
+        public void Defaults() // В RocketMod метод называется Defaults, а не LoadDefaults
         {
             MinDamageThreshold = 25;
             FireDamage = 4.0f;
@@ -27,7 +26,7 @@ namespace VehicleModulesSystem
             BarricadeRepairID = 328;
             RepairRadius = 15f;
             
-            ChainReactionChance = 0.05f; // 5% шанс каждый тик при утечке
+            ChainReactionChance = 0.05f; 
             SaveInterval = 300f; 
             EnableCameraShake = true;
         }
