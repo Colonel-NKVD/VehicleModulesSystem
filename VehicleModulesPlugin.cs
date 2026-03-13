@@ -38,7 +38,7 @@ namespace VehicleModulesSystem
         protected override void Unload()
         {
             SaveData();
-            VehicleManager.onVehicleAssetSpawned -= OnVehicleSpawned;
+            VehicleManager.onVehicleSpawned -= OnVehicleSpawned;
         }
 
         public override TranslationList DefaultTranslations => new TranslationList
