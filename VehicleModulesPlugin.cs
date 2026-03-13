@@ -11,24 +11,24 @@ namespace VehicleModulesSystem
     {
         public static VehicleModulesPlugin Instance;
         
-        // Поля, необходимые для VehicleTracker.cs
+        // Поля, без которых VehicleTracker.cs выдаст ошибку при компиляции
         public Dictionary<uint, Dictionary<string, float>> SavedVehicleData = new Dictionary<uint, Dictionary<string, float>>();
         public bool IsDirty = false;
 
         protected override void Load()
         {
             Instance = this;
-            // Прямая подписка на стандартный делегат Unturned
-            VehicleManager.onVehicleRegionAdded += OnVehicleSpawned;
+
+            // Используем наиболее вероятное имя события для твоей версии
+            VehicleManager.onVehicleSpawned += OnVehicleSpawned;
         }
 
         protected override void Unload()
         {
-            VehicleManager.onVehicleRegionAdded -= OnVehicleSpawned;
+            VehicleManager.onVehicleSpawned -= OnVehicleSpawned;
         }
 
-        // Самая стабильная сигнатура для старых и средних версий игры
-        private void OnVehicleSpawned(byte x, byte y, InteractableVehicle vehicle)
+        private void OnVehicleSpawned(InteractableVehicle vehicle)
         {
             if (vehicle != null && vehicle.gameObject.GetComponent<VehicleTracker>() == null)
             {
@@ -36,6 +36,7 @@ namespace VehicleModulesSystem
             }
         }
 
+        // Переводы для вывода статуса в CommandVStat
         public override TranslationList DefaultTranslations => new TranslationList
         {
             { "Status_Perfect", "Исправен" },
