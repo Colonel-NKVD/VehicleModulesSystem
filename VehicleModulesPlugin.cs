@@ -11,13 +11,13 @@ namespace VehicleModulesSystem
     {
         public static VehicleModulesPlugin Instance;
         
-        // Эти данные необходимы для работы VehicleTracker.cs
         public Dictionary<uint, Dictionary<string, float>> SavedVehicleData = new Dictionary<uint, Dictionary<string, float>>();
         public bool IsDirty = false;
 
         protected override void Load()
         {
             Instance = this;
+            // Подписываемся на событие через координаты
             VehicleManager.onVehicleRegionAdded += OnVehicleSpawned;
         }
 
@@ -26,8 +26,8 @@ namespace VehicleModulesSystem
             VehicleManager.onVehicleRegionAdded -= OnVehicleSpawned;
         }
 
-        // Если VehicleRegion вызывает ошибку, используй: byte x, byte y, InteractableVehicle vehicle
-        private void OnVehicleSpawned(VehicleRegion region, InteractableVehicle vehicle)
+        // Исправлено: принимаем byte x, byte y вместо VehicleRegion
+        private void OnVehicleSpawned(byte x, byte y, InteractableVehicle vehicle)
         {
             if (vehicle != null && vehicle.gameObject.GetComponent<VehicleTracker>() == null)
             {
@@ -35,7 +35,6 @@ namespace VehicleModulesSystem
             }
         }
 
-        // Метод для переводов, который запрашивает трекер
         public override TranslationList DefaultTranslations => new TranslationList
         {
             { "Status_Perfect", "Исправен" },
