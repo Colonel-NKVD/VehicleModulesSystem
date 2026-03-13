@@ -3,8 +3,6 @@ name: Build VehicleModulesSystem
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
 
 jobs:
   build:
@@ -17,16 +15,10 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
 
-    - name: Setup NuGet
-      uses: NuGet/setup-nuget@v1.2.0
-
-    - name: Restore NuGet Packages
-      run: nuget restore VehicleModulesSystem.csproj
-
+    # Шаг NuGet убираем или оставляем пустым, если нет других зависимостей
+    
     - name: Build Plugin
-      run: msbuild VehicleModulesSystem.csproj /p:Configuration=Release /p:UnturnedPath="C:\dummy" 
-      # Примечание: В облаке пути будут отличаться, обычно библиотеки подкладывают через скрипт 
-      # или используют NuGet-пакеты OpenMod/RocketMod.
+      run: msbuild VehicleModulesSystem.csproj /p:Configuration=Release
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
