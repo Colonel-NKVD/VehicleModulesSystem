@@ -37,6 +37,14 @@
       <HintPath>Libraries\UnityEngine.PhysicsModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="com.rlabrecque.steamworks.net">
+      <HintPath>Libraries\com.rlabrecque.steamworks.net.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SDG.NetTransport">
+      <HintPath>Libraries\SDG.NetTransport.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
