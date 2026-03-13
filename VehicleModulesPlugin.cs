@@ -1,34 +1,34 @@
-using Rocket.Unturned;
-using Rocket.Core.Plugins;
-using SDG.Unturned;
-using UnityEngine;
+using Rocket.API;
 
 namespace VehicleModulesSystem
 {
-    public class VehicleModulesPlugin : RocketPlugin<VehicleModulesConfiguration>
+    public class VehicleModulesConfiguration : IRocketPluginConfiguration
     {
-        public static VehicleModulesPlugin Instance;
+        public ushort MinDamageThreshold;
+        public float FireDamage;
+        public ushort TurretWeaponID;
+        public ushort RepairResourceID;
+        public byte ResourcePerModule;
+        public ushort BarricadeRepairID;
+        public float RepairRadius;
+        
+        public float ChainReactionChance; 
+        public float SaveInterval; 
+        public bool EnableCameraShake;
 
-        protected override void Load()
+        public void Defaults() // В RocketMod метод называется Defaults, а не LoadDefaults
         {
-            Instance = this;
-
-            // Используем событие добавления в регион
-            VehicleManager.onVehicleRegionAdded += OnVehicleSpawned;
-        }
-
-        protected override void Unload()
-        {
-            VehicleManager.onVehicleRegionAdded -= OnVehicleSpawned;
-        }
-
-        // Обновленная сигнатура метода: принимает регион и транспорт
-        private void OnVehicleSpawned(VehicleRegion region, InteractableVehicle vehicle)
-        {
-            if (vehicle != null && vehicle.gameObject.GetComponent<VehicleTracker>() == null)
-            {
-                vehicle.gameObject.AddComponent<VehicleTracker>();
-            }
+            MinDamageThreshold = 25;
+            FireDamage = 4.0f;
+            TurretWeaponID = 1300;
+            RepairResourceID = 67;
+            ResourcePerModule = 3;
+            BarricadeRepairID = 328;
+            RepairRadius = 15f;
+            
+            ChainReactionChance = 0.05f; 
+            SaveInterval = 300f; 
+            EnableCameraShake = true;
         }
     }
 }
