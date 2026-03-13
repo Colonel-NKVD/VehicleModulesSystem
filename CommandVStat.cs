@@ -8,7 +8,7 @@ using UnityEngine;
 
 namespace VehicleModulesSystem
 {
-    public class CommandVStat : ICommand
+    public class CommandVStat : IRocketCommand
     {
         public AllowedCaller AllowedCaller => AllowedCaller.Player;
         public string Name => "vstat";
