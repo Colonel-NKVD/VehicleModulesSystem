@@ -1,1 +1,35 @@
+name: Build VehicleModulesSystem
 
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.1
+
+    - name: Setup NuGet
+      uses: NuGet/setup-nuget@v1.2.0
+
+    - name: Restore NuGet Packages
+      run: nuget restore VehicleModulesSystem.csproj
+
+    - name: Build Plugin
+      run: msbuild VehicleModulesSystem.csproj /p:Configuration=Release /p:UnturnedPath="C:\dummy" 
+      # Примечание: В облаке пути будут отличаться, обычно библиотеки подкладывают через скрипт 
+      # или используют NuGet-пакеты OpenMod/RocketMod.
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: VehicleModulesSystem-v7.0
+        path: bin/Release/VehicleModulesSystem.dll
