@@ -4,6 +4,7 @@ using System.Reflection;
 using SDG.Unturned;
 using UnityEngine;
 using VehicleModulesSystem;
+using Steamworks;
 
 public class VehicleTracker : MonoBehaviour
 {
