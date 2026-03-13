@@ -16,7 +16,8 @@ namespace VehicleModulesSystem
         public float SaveInterval; 
         public bool EnableCameraShake;
 
-        public void Defaults() // В RocketMod метод называется Defaults, а не LoadDefaults
+        // Исправлено: метод должен называться LoadDefaults
+        public void LoadDefaults()
         {
             MinDamageThreshold = 25;
             FireDamage = 4.0f;
