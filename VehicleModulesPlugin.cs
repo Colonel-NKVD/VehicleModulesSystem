@@ -22,7 +22,7 @@ namespace VehicleModulesSystem
             dataPath = Path.Combine(Directory, "VehicleData.json");
             LoadData();
 
-            VehicleManager.onVehicleAssetSpawned += OnVehicleSpawned;
+            VehicleManager.onVehicleSpawned += OnVehicleSpawned;
             foreach (var v in VehicleManager.vehicles) AddTracker(v);
         }
 
