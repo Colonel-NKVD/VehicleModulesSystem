@@ -1,36 +1,34 @@
-using Rocket.Unturned;
-using Rocket.Core.Plugins;
-using Rocket.Unturned.Events; // Важно для событий
-using SDG.Unturned;
-using UnityEngine;
 using System.Collections.Generic;
 using Rocket.API.Collections;
+using Rocket.Core.Plugins;
+using Rocket.Unturned;
+using SDG.Unturned;
+using UnityEngine;
 
 namespace VehicleModulesSystem
 {
     public class VehicleModulesPlugin : RocketPlugin<VehicleModulesConfiguration>
     {
         public static VehicleModulesPlugin Instance;
-
-        // Эти поля необходимы для работы твоего VehicleTracker.cs
+        
+        // Поля, необходимые для VehicleTracker.cs
         public Dictionary<uint, Dictionary<string, float>> SavedVehicleData = new Dictionary<uint, Dictionary<string, float>>();
         public bool IsDirty = false;
 
         protected override void Load()
         {
             Instance = this;
-
-            // Используем событие RocketMod — оно стабильнее
-            UnturnedVehicleEvents.OnVehicleSpawned += OnVehicleSpawned;
+            // Прямая подписка на стандартный делегат Unturned
+            VehicleManager.onVehicleRegionAdded += OnVehicleSpawned;
         }
 
         protected override void Unload()
         {
-            UnturnedVehicleEvents.OnVehicleSpawned -= OnVehicleSpawned;
+            VehicleManager.onVehicleRegionAdded -= OnVehicleSpawned;
         }
 
-        // Сигнатура RocketMod принимает только сам транспорт
-        private void OnVehicleSpawned(InteractableVehicle vehicle)
+        // Самая стабильная сигнатура для старых и средних версий игры
+        private void OnVehicleSpawned(byte x, byte y, InteractableVehicle vehicle)
         {
             if (vehicle != null && vehicle.gameObject.GetComponent<VehicleTracker>() == null)
             {
@@ -38,7 +36,6 @@ namespace VehicleModulesSystem
             }
         }
 
-        // Переводы, которые запрашивает трекер
         public override TranslationList DefaultTranslations => new TranslationList
         {
             { "Status_Perfect", "Исправен" },
