@@ -1,34 +1,47 @@
-using Rocket.API;
+using Rocket.Unturned;
+using Rocket.Core.Plugins;
+using SDG.Unturned;
+using UnityEngine;
+using System.Collections.Generic;
+using Rocket.API.Collections;
 
 namespace VehicleModulesSystem
 {
-    public class VehicleModulesConfiguration : IRocketPluginConfiguration
+    public class VehicleModulesPlugin : RocketPlugin<VehicleModulesConfiguration>
     {
-        public ushort MinDamageThreshold;
-        public float FireDamage;
-        public ushort TurretWeaponID;
-        public ushort RepairResourceID;
-        public byte ResourcePerModule;
-        public ushort BarricadeRepairID;
-        public float RepairRadius;
+        public static VehicleModulesPlugin Instance;
         
-        public float ChainReactionChance; 
-        public float SaveInterval; 
-        public bool EnableCameraShake;
+        // Эти данные необходимы для работы VehicleTracker.cs
+        public Dictionary<uint, Dictionary<string, float>> SavedVehicleData = new Dictionary<uint, Dictionary<string, float>>();
+        public bool IsDirty = false;
 
-        public void Defaults() // В RocketMod метод называется Defaults, а не LoadDefaults
+        protected override void Load()
         {
-            MinDamageThreshold = 25;
-            FireDamage = 4.0f;
-            TurretWeaponID = 1300;
-            RepairResourceID = 67;
-            ResourcePerModule = 3;
-            BarricadeRepairID = 328;
-            RepairRadius = 15f;
-            
-            ChainReactionChance = 0.05f; 
-            SaveInterval = 300f; 
-            EnableCameraShake = true;
+            Instance = this;
+            VehicleManager.onVehicleRegionAdded += OnVehicleSpawned;
         }
+
+        protected override void Unload()
+        {
+            VehicleManager.onVehicleRegionAdded -= OnVehicleSpawned;
+        }
+
+        // Если VehicleRegion вызывает ошибку, используй: byte x, byte y, InteractableVehicle vehicle
+        private void OnVehicleSpawned(VehicleRegion region, InteractableVehicle vehicle)
+        {
+            if (vehicle != null && vehicle.gameObject.GetComponent<VehicleTracker>() == null)
+            {
+                vehicle.gameObject.AddComponent<VehicleTracker>();
+            }
+        }
+
+        // Метод для переводов, который запрашивает трекер
+        public override TranslationList DefaultTranslations => new TranslationList
+        {
+            { "Status_Perfect", "Исправен" },
+            { "Status_Damaged", "Поврежден" },
+            { "Status_Critical", "Критическое состояние" },
+            { "Status_Destroyed", "Уничтожен" }
+        };
     }
 }
