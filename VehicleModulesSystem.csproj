@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>VehicleModulesSystem</AssemblyName>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Rocket.API">
+      <HintPath>$(UnturnedPath)\Extras\Rocket.Unturned\Rocket.API.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Rocket.Core">
+      <HintPath>$(UnturnedPath)\Extras\Rocket.Unturned\Rocket.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Rocket.Unturned">
+      <HintPath>$(UnturnedPath)\Extras\Rocket.Unturned\Rocket.Unturned.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(UnturnedPath)\Unturned_Data\Managed\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(UnturnedPath)\Unturned_Data\Managed\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(UnturnedPath)\Unturned_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(UnturnedPath)\Unturned_Data\Managed\UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(UnturnedPath)\Unturned_Data\Managed\Newtonsoft.Json.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Legacy.RocketMod.API" Version="4.9.3.5" />
+  </ItemGroup>
+
+</Project>
