@@ -14,9 +14,6 @@ public class VehicleTracker : MonoBehaviour
     private float tickTimer = 0f;
     private float effectTimer = 0f;
 
-    // КЭШ ДЛЯ ОБХОДА АРГУМЕНТОВ (Reflection)
-    private static MethodInfo _askDamageMethod;
-
     void Start()
     {
         vehicle = GetComponent<InteractableVehicle>();
@@ -39,7 +36,6 @@ public class VehicleTracker : MonoBehaviour
     {
         if (vehicle == null || vehicle.isDead) return;
 
-        // Простая детекция урона через изменение HP
         if (vehicle.health < lastHealth)
         {
             ApplyImpact((ushort)(lastHealth - vehicle.health));
@@ -47,72 +43,67 @@ public class VehicleTracker : MonoBehaviour
         }
         else if (vehicle.health > lastHealth) lastHealth = vehicle.health;
 
-        // Эффекты (через обход)
         if (Time.time - effectTimer > 0.6f)
         {
             effectTimer = Time.time;
-            ExecuteVisuals();
+            #pragma warning disable CS0618
+            if (ModuleHP[TankModule.FuelLeak] < 50f)
+                EffectManager.sendEffect(134, 32f, transform.position + Vector3.up);
+            if (ModuleHP[TankModule.Engine] < 30f)
+                EffectManager.sendEffect(45, 32f, transform.position + Vector3.up * 1.5f);
+            #pragma warning restore CS0618
         }
 
         if (Time.time - tickTimer > 1f)
         {
             tickTimer = Time.time;
-            ExecuteLogic();
-        }
-    }
-
-    private void ExecuteVisuals()
-    {
-        // Используем старый sendEffect, НО игнорируем предупреждения компилятора
-        // Это точно сработает, так как раньше оно давало только Warning
-        #pragma warning disable CS0618 
-        if (ModuleHP[TankModule.FuelLeak] < 50f)
-            EffectManager.sendEffect(134, 32f, transform.position + Vector3.up);
-        
-        if (ModuleHP[TankModule.Engine] < 30f)
-            EffectManager.sendEffect(45, 32f, transform.position + Vector3.up * 1.5f);
-        #pragma warning restore CS0618
-    }
-
-    private void ExecuteLogic()
-    {
-        if (ModuleHP[TankModule.FuelLeak] < 40f)
-        {
-            float fireDmg = VehicleModulesPlugin.Instance.Configuration.Instance.FireDamage;
-            
-            // ОБХОД askDamage: просто уменьшаем HP напрямую и вызываем обновление
-            // Это сработает в любой версии Unturned
-            if (vehicle.health > fireDmg)
-                vehicle.health -= (ushort)fireDmg;
-            else
-                vehicle.health = 0;
-
-            // Синхронизация здоровья с игроками
-            vehicle.tellHealth(CSteamID.Nil, vehicle.health);
-
-            if (ModuleHP[TankModule.Fire] > 0)
+            if (ModuleHP[TankModule.FuelLeak] < 40f)
             {
-                ModuleHP[TankModule.FuelLeak] += 2f;
-                ModuleHP[TankModule.Fire] -= 1f; 
-            }
-        }
+                float fireDmg = VehicleModulesPlugin.Instance.Configuration.Instance.FireDamage;
+                // Наносим урон напрямую, чтобы не возиться с askDamage
+                if (vehicle.health > fireDmg) vehicle.health -= (ushort)fireDmg;
+                else vehicle.health = 0;
 
-        if (ModuleHP[TankModule.Engine] <= 0 && vehicle.isEngineOn)
-        {
-            vehicle.askFillFuel(0); // Глушим мотор через топливо
+                // ВЫЗОВ СИНХРОНИЗАЦИИ ЧЕРЕЗ ОБХОД (Reflection)
+                SmartInvoke(vehicle, "tellHealth", CSteamID.Nil, vehicle.health);
+
+                if (ModuleHP[TankModule.Fire] > 0)
+                {
+                    ModuleHP[TankModule.FuelLeak] += 2f;
+                    ModuleHP[TankModule.Fire] -= 1f; 
+                }
+            }
+            if (ModuleHP[TankModule.Engine] <= 0 && vehicle.isEngineOn) vehicle.askFillFuel(0);
         }
+    }
+
+    // Тот самый "Умный вызов", который клал на количество аргументов
+    private void SmartInvoke(object target, string methodName, params object[] args)
+    {
+        try {
+            MethodInfo method = target.GetType().GetMethod(methodName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            if (method == null) return;
+
+            ParameterInfo[] parameters = method.GetParameters();
+            object[] finalArgs = new object[parameters.Length];
+
+            for (int i = 0; i < parameters.Length; i++) {
+                if (i < args.Length) finalArgs[i] = args[i];
+                else finalArgs[i] = parameters[i].HasDefaultValue ? parameters[i].DefaultValue : null;
+            }
+            method.Invoke(target, finalArgs);
+        } catch { /* Игнорируем ошибки вызова в рантайме */ }
     }
 
     public void ApplyImpact(ushort damage)
     {
         if (damage < VehicleModulesPlugin.Instance.Configuration.Instance.MinDamageThreshold) return;
 
-        // Рандомный выбор модуля
         var values = Enum.GetValues(typeof(TankModule));
         TankModule hit = (TankModule)values.GetValue(UnityEngine.Random.Range(0, values.Length));
         ModuleHP[hit] = Mathf.Max(0, ModuleHP[hit] - (damage * 1.3f));
         
-        NotifyCrew($"<color=red>[ВНИМАНИЕ]</color> Поврежден узел: {hit}!");
+        NotifyCrew($"<color=red>[СИСТЕМА]</color> Поврежден модуль: {hit}!");
         MarkDirty();
     }
 
