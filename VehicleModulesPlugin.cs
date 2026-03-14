@@ -5,7 +5,6 @@ using System.Linq;
 using Rocket.API;
 using Rocket.Core.Plugins;
 using Rocket.Unturned.Chat;
-using Rocket.Unturned.Player;
 using SDG.Unturned;
 using UnityEngine;
 
@@ -35,6 +34,7 @@ namespace VehicleModulesSystem
         {
             VehicleManager.onDamageVehicleRequested -= OnVehicleDamaged;
             StopAllCoroutines();
+            TrackedVehicles.Clear();
         }
 
         private void OnVehicleDamaged(ref DamageVehicleParameters parameters, ref bool shouldAllow)
@@ -48,63 +48,71 @@ namespace VehicleModulesSystem
                 TrackedVehicles.Add(vehicle.instanceID, state);
             }
 
-            ProcessRandomModules(vehicle, state);
+            ProcessModuleDamage(vehicle, state);
 
-            // Логика "Клина": если пушка сломана, 50% шанс получить урон по себе при получении удара
+            // Клин орудия: шанс внутреннего взрыва при получении урона
             if (state.IsGunBroken && UnityEngine.Random.value < 0.50f)
             {
                 ExplodeInternally(vehicle);
             }
         }
 
-        private void ProcessRandomModules(InteractableVehicle v, VehicleState s)
+        private void ProcessModuleDamage(InteractableVehicle v, VehicleState s)
         {
             float roll = UnityEngine.Random.value;
-            var driver = v.passengers[0].player?.playerID.steamID;
+            var driverID = v.passengers[0].player?.playerID.steamID;
 
-            if (roll < Configuration.Instance.ChanceFuelLeak && !s.IsFuelTankBroken)
+            // Расчет шансов для каждого модуля отдельно
+            if (UnityEngine.Random.value < Configuration.Instance.ChanceFuelLeak && !s.IsFuelTankBroken)
             {
                 s.IsFuelTankBroken = true;
-                UnturnedChat.Say(driver, "БАК ПРОБИТ!", Color.red);
+                UnturnedChat.Say(driverID, "КРИТИЧЕСКИЙ УРОН: Бак пробит!", Color.red);
                 StartCoroutine(FuelLeakRoutine(v, s));
             }
-            else if (roll < Configuration.Instance.ChanceTransmission && !s.IsTransmissionBroken)
+            
+            if (UnityEngine.Random.value < Configuration.Instance.ChanceTransmission && !s.IsTransmissionBroken)
             {
                 s.IsTransmissionBroken = true;
-                UnturnedChat.Say(driver, "ТРАНСМИССИЯ ПОВРЕЖДЕНА!", Color.red);
+                UnturnedChat.Say(driverID, "КРИТИЧЕСКИЙ УРОН: Трансмиссия повреждена!", Color.red);
                 StartCoroutine(TransmissionRoutine(v));
             }
-            else if (roll < Configuration.Instance.ChanceGunBroken && !s.IsGunBroken)
+
+            if (UnityEngine.Random.value < Configuration.Instance.ChanceGunBroken && !s.IsGunBroken)
             {
                 s.IsGunBroken = true;
-                UnturnedChat.Say(driver, "ОРУДИЕ ЗАКЛИНИЛО!", Color.red);
+                UnturnedChat.Say(driverID, "КРИТИЧЕСКИЙ УРОН: Орудие заклинило!", Color.red);
             }
-            else if (roll < Configuration.Instance.ChanceFire)
+
+            if (UnityEngine.Random.value < Configuration.Instance.ChanceFire)
             {
                 StartCoroutine(FireRoutine(v, s));
             }
-            else if (roll < Configuration.Instance.ChanceStun)
+
+            if (UnityEngine.Random.value < Configuration.Instance.ChanceSmoke)
+            {
+                StartCoroutine(SmokeRoutine(v, s));
+            }
+
+            if (UnityEngine.Random.value < Configuration.Instance.ChanceStun)
             {
                 StartCoroutine(StunRoutine(v));
             }
         }
 
-        // --- ЭФФЕКТЫ ---
-
         private IEnumerator StunRoutine(InteractableVehicle v)
         {
-            var players = v.passengers.Where(p => p.player != null).Select(p => p.player.player).ToList();
+            var passengers = v.passengers.Where(p => p.player != null).Select(p => p.player.player).ToList();
 
-            foreach (var p in players)
+            foreach (var p in passengers)
             {
-                // ВКЛЮЧАЕМ КУРСОР И БЛОКИРУЕМ ИГРУ (Modal Flag)
+                // Modal флаг открывает "пустое" окно, блокирует управление и вызывает курсор
                 p.setPluginWidgetFlag(EPluginWidgetFlags.Modal, true);
-                UnturnedChat.Say(p.channel.owner.playerID.steamID, "ВЫ ОГЛУШЕНЫ!", Color.yellow);
+                UnturnedChat.Say(p.channel.owner.playerID.steamID, "ВЫ КОНТУЖЕНЫ!", Color.yellow);
             }
 
             yield return new WaitForSeconds(5f);
 
-            foreach (var p in players)
+            foreach (var p in passengers)
             {
                 if (p != null) p.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
             }
@@ -114,7 +122,7 @@ namespace VehicleModulesSystem
         {
             if (s.IsOnFire) yield break;
             s.IsOnFire = true;
-            EffectManager.sendEffect(125, 64, v.transform.position); // Ванильный взрыв/огонь
+            EffectManager.sendEffect(125, 64, v.transform.position);
 
             for (int i = 0; i < 8; i++)
             {
@@ -122,14 +130,31 @@ namespace VehicleModulesSystem
                 VehicleManager.damage(v, 150, 1, false);
                 yield return new WaitForSeconds(1f);
             }
-            if (v != null) VehicleManager.damage(v, 10000, 1, false);
+            if (v != null && !v.isExploded) VehicleManager.damage(v, 10000, 1, false);
+        }
+
+        private IEnumerator SmokeRoutine(InteractableVehicle v, VehicleState s)
+        {
+            if (s.IsSmoking) yield break;
+            s.IsSmoking = true;
+            EffectManager.sendEffect(123, 64, v.transform.position);
+
+            float duration = UnityEngine.Random.Range(15, 30);
+            float start = Time.time;
+            while (Time.time - start < duration && v != null && !v.isExploded && s.IsSmoking)
+            {
+                foreach (var seat in v.passengers.Where(p => p.player != null))
+                    seat.player.player.life.askSuffocate(10);
+                yield return new WaitForSeconds(2f);
+            }
+            s.IsSmoking = false;
         }
 
         private IEnumerator FuelLeakRoutine(InteractableVehicle v, VehicleState s)
         {
             while (s.IsFuelTankBroken && v != null && !v.isExploded)
             {
-                if (v.fuel > 0) v.fuel -= 5;
+                if (v.fuel > 0) v.fuel -= 3;
                 yield return new WaitForSeconds(1f);
             }
         }
