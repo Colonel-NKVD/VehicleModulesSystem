@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using SDG.Unturned;
 using UnityEngine;
 using VehicleModulesSystem;
+using Steamworks;
 
 public class VehicleTracker : MonoBehaviour
 {
@@ -20,7 +20,6 @@ public class VehicleTracker : MonoBehaviour
         
         lastHealth = vehicle.health;
 
-        // Загрузка данных или инициализация
         if (VehicleModulesPlugin.Instance.SavedVehicleData.TryGetValue(vehicle.instanceID, out var saved))
         {
             foreach (var entry in saved) 
@@ -36,26 +35,26 @@ public class VehicleTracker : MonoBehaviour
     {
         if (vehicle == null || vehicle.isDead) return;
 
-        // 1. ДЕТЕКЦИЯ УРОНА (сделали чувствительнее)
+        // Детекция урона
         if (vehicle.health < lastHealth)
         {
             ushort damageTaken = (ushort)(lastHealth - vehicle.health);
             ApplyImpact(damageTaken);
             lastHealth = vehicle.health;
         }
-        else if (vehicle.health > lastHealth) // Если машину починили ремкой
+        else if (vehicle.health > lastHealth)
         {
             lastHealth = vehicle.health;
         }
 
-        // 2. ВИЗУАЛЬНЫЕ ЭФФЕКТЫ (то, чего не хватало)
+        // Визуальные эффекты (Исправлено: TriggerEffectParameters)
         if (Time.time - effectTimer > 0.5f)
         {
             effectTimer = Time.time;
             SpawnVisualEffects();
         }
 
-        // 3. СИСТЕМНАЯ ЛОГИКА (Раз в секунду)
+        // Системная логика
         if (Time.time - tickTimer > 1f)
         {
             tickTimer = Time.time;
@@ -65,29 +64,45 @@ public class VehicleTracker : MonoBehaviour
 
     private void SpawnVisualEffects()
     {
-        // Если горит топливо — спавним огонь (ID 134 или 45 — стандартные эффекты Unturned)
+        // Используем современный способ вызова эффектов через параметры
         if (ModuleHP[TankModule.FuelLeak] < 50f)
         {
-            // Эффект огня в центре машины
-            EffectManager.sendEffect(134, 16f, transform.position + Vector3.up);
+            TriggerEffectParameters parameters = new TriggerEffectParameters(AssetReference<EffectAsset>.invalid);
+            parameters.relevantPosition = transform.position + Vector3.up;
+            parameters.relevantDistance = 128f;
+            // ID эффекта огня (134 - стандартный взрыв/огонь)
+            EffectAsset asset = Assets.find(EAssetType.EFFECT, 134) as EffectAsset;
+            if (asset != null)
+            {
+                parameters.asset = asset;
+                EffectManager.triggerEffect(parameters);
+            }
         }
 
-        // Если выбит двигатель — пускаем дым
         if (ModuleHP[TankModule.Engine] < 30f)
         {
-            EffectManager.sendEffect(45, 16f, transform.position + Vector3.up * 1.5f);
+            TriggerEffectParameters parameters = new TriggerEffectParameters(AssetReference<EffectAsset>.invalid);
+            parameters.relevantPosition = transform.position + Vector3.up * 1.5f;
+            parameters.relevantDistance = 128f;
+            // ID эффекта дыма (45)
+            EffectAsset asset = Assets.find(EAssetType.EFFECT, 45) as EffectAsset;
+            if (asset != null)
+            {
+                parameters.asset = asset;
+                EffectManager.triggerEffect(parameters);
+            }
         }
     }
 
     private void ProcessModuleLogic()
     {
-        // Логика пожара
         if (ModuleHP[TankModule.FuelLeak] < 40f)
         {
             float fireDamage = VehicleModulesPlugin.Instance.Configuration.Instance.FireDamage;
-            vehicle.askDamage((ushort)fireDamage, false, Steamworks.CSteamID.Nil, EDamageOrigin.Unknown);
             
-            // Если пожарная система цела, она понемногу тушит
+            // ИСПРАВЛЕНИЕ ОШИБКИ CS1501: Используем 3 аргумента (Урон, Можно ли чинить, Кто нанес)
+            vehicle.askDamage((ushort)fireDamage, false, CSteamID.Nil);
+            
             if (ModuleHP[TankModule.Fire] > 0)
             {
                 ModuleHP[TankModule.FuelLeak] += 2f;
@@ -95,30 +110,33 @@ public class VehicleTracker : MonoBehaviour
             }
         }
 
-        // Логика двигателя
         if (ModuleHP[TankModule.Engine] <= 0)
         {
-            // Если двигатель в ноль — глушим его принудительно
             if (vehicle.isEngineOn) vehicle.askFillFuel(0); 
         }
     }
 
     public void ApplyImpact(ushort damage)
     {
-        // Если урон меньше порога из конфига — модули не страдают
         if (damage < VehicleModulesPlugin.Instance.Configuration.Instance.MinDamageThreshold) return;
 
-        // Тряска камеры при попадании
-        if (VehicleModulesPlugin.Instance.Configuration.Instance.EnableCameraShake)
-            EffectManager.sendEffect(45, 24f, transform.position); 
+        // Эффект тряски / попадания
+        TriggerEffectParameters parameters = new TriggerEffectParameters(AssetReference<EffectAsset>.invalid);
+        parameters.relevantPosition = transform.position;
+        parameters.relevantDistance = 64f;
+        EffectAsset asset = Assets.find(EAssetType.EFFECT, 45) as EffectAsset;
+        if (asset != null)
+        {
+            parameters.asset = asset;
+            EffectManager.triggerEffect(parameters);
+        }
 
-        // Рандомно выбираем модуль для повреждения
         Array values = Enum.GetValues(typeof(TankModule));
         TankModule hit = (TankModule)values.GetValue(UnityEngine.Random.Range(0, values.Length));
         
         ModuleHP[hit] = Mathf.Max(0, ModuleHP[hit] - (damage * 1.2f));
         
-        NotifyCrew($"<color=red>[СИСТЕМА]</color> Попадание в узел: {hit}!");
+        NotifyCrew($"<color=red>[СИСТЕМА]</color> Критическое повреждение узла: {hit}!");
         MarkDirty();
     }
 
@@ -134,7 +152,7 @@ public class VehicleTracker : MonoBehaviour
     {
         foreach (var p in vehicle.passengers)
             if (p?.player != null)
-                ChatManager.serverSendMessage(msg, Color.white, null, p.player.player.channel.owner, EChatMode.SAY, "https://i.imgur.com/7S6S8S8.png", true);
+                ChatManager.serverSendMessage(msg, Color.white, null, p.player.player.channel.owner, EChatMode.SAY, null, true);
     }
 
     public string GetModuleStatus(TankModule mod)
