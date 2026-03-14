@@ -11,10 +11,10 @@ namespace VehicleModulesSystem
     {
         public AllowedCaller AllowedCaller => AllowedCaller.Player;
         public string Name => "vfix";
-        public string Help => "Ремонт модулей танка";
+        public string Help => "Полный ремонт модулей";
         public string Syntax => "";
         public List<string> Aliases => new List<string>();
-        public List<string> Permissions => new List<string> { "tank.repair" };
+        public List<string> Permissions => new List<string> { "vehicle.repair" };
 
         public void Execute(IRocketPlayer caller, string[] command)
         {
@@ -23,26 +23,24 @@ namespace VehicleModulesSystem
 
             if (v == null || !VehicleModulesPlugin.Instance.Configuration.Instance.TargetedVehicleIds.Contains(v.asset.id))
             {
-                UnturnedChat.Say(player, "Вы должны находиться в танке!", Color.red);
+                UnturnedChat.Say(player, "Вы должны быть внутри целевой техники!", Color.red);
                 return;
             }
 
-            // Проверка ремзоны
             bool isAtStation = false;
-            float dist = VehicleModulesPlugin.Instance.Configuration.Instance.RepairStationRadius;
+            float radius = VehicleModulesPlugin.Instance.Configuration.Instance.RepairStationRadius;
             ushort stationId = VehicleModulesPlugin.Instance.Configuration.Instance.RepairStationBarricadeId;
 
-            // Ищем ближайшие баррикады через стандартный поиск (эффективнее Physics)
+            // Профессиональный поиск объектов в радиусе без тяжелой физики
             List<Region3d> regions = new List<Region3d>();
-            Regions.getRegionsInRadius(player.Position, dist, regions);
-
+            Regions.getRegionsInRadius(player.Position, radius, regions);
             foreach (var region in regions)
             {
                 if (BarricadeManager.tryGetRegion(region.x, region.y, region.plant, out BarricadeRegion br))
                 {
                     foreach (var drop in br.drops)
                     {
-                        if (drop.asset.id == stationId && Vector3.Distance(drop.model.position, player.Position) <= dist)
+                        if (drop.asset.id == stationId && Vector3.Distance(drop.model.position, player.Position) <= radius)
                         {
                             isAtStation = true;
                             break;
@@ -54,11 +52,11 @@ namespace VehicleModulesSystem
 
             if (!isAtStation)
             {
-                UnturnedChat.Say(player, "Ремонтная станция не найдена рядом!", Color.red);
+                UnturnedChat.Say(player, "Ремонтная станция не обнаружена!", Color.red);
                 return;
             }
 
-            UnturnedChat.Say(player, "Ремонт начат... Не покидайте машину 30 секунд.", Color.yellow);
+            UnturnedChat.Say(player, "Начат капитальный ремонт (30 сек.)...", Color.yellow);
             VehicleModulesPlugin.Instance.StartCoroutine(RepairTimer(player, v));
         }
 
@@ -76,8 +74,8 @@ namespace VehicleModulesSystem
                     state.IsOnFire = false;
                     state.IsSmoking = false;
                     
-                    v.askRepair(65000); // Полный ремонт ХП
-                    v.askFillFuel(65000); // Заправка
+                    v.askRepair(65000);
+                    v.askFillFuel(65000);
                     v.batteryCharge = 100;
                     
                     UnturnedChat.Say(p, "ТЕХНИКА ПОЛНОСТЬЮ ВОССТАНОВЛЕНА", Color.green);
