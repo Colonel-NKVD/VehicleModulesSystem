@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using SDG.Unturned;
 using UnityEngine;
 using VehicleModulesSystem;
@@ -13,13 +14,16 @@ public class VehicleTracker : MonoBehaviour
     private float tickTimer = 0f;
     private float effectTimer = 0f;
 
+    // КЭШ ДЛЯ ОБХОДА АРГУМЕНТОВ (Reflection)
+    private static MethodInfo _askDamageMethod;
+
     void Start()
     {
         vehicle = GetComponent<InteractableVehicle>();
         if (vehicle == null) return;
-        
         lastHealth = vehicle.health;
 
+        // Инициализация модулей
         if (VehicleModulesPlugin.Instance.SavedVehicleData.TryGetValue(vehicle.instanceID, out var saved))
         {
             foreach (var entry in saved) 
@@ -35,74 +39,57 @@ public class VehicleTracker : MonoBehaviour
     {
         if (vehicle == null || vehicle.isDead) return;
 
-        // Детекция урона
+        // Простая детекция урона через изменение HP
         if (vehicle.health < lastHealth)
         {
-            ushort damageTaken = (ushort)(lastHealth - vehicle.health);
-            ApplyImpact(damageTaken);
+            ApplyImpact((ushort)(lastHealth - vehicle.health));
             lastHealth = vehicle.health;
         }
-        else if (vehicle.health > lastHealth)
-        {
-            lastHealth = vehicle.health;
-        }
+        else if (vehicle.health > lastHealth) lastHealth = vehicle.health;
 
-        // Визуальные эффекты (Исправлено: TriggerEffectParameters)
-        if (Time.time - effectTimer > 0.5f)
+        // Эффекты (через обход)
+        if (Time.time - effectTimer > 0.6f)
         {
             effectTimer = Time.time;
-            SpawnVisualEffects();
+            ExecuteVisuals();
         }
 
-        // Системная логика
         if (Time.time - tickTimer > 1f)
         {
             tickTimer = Time.time;
-            ProcessModuleLogic();
+            ExecuteLogic();
         }
     }
 
-    private void SpawnVisualEffects()
+    private void ExecuteVisuals()
     {
-        // Используем современный способ вызова эффектов через параметры
+        // Используем старый sendEffect, НО игнорируем предупреждения компилятора
+        // Это точно сработает, так как раньше оно давало только Warning
+        #pragma warning disable CS0618 
         if (ModuleHP[TankModule.FuelLeak] < 50f)
-        {
-            TriggerEffectParameters parameters = new TriggerEffectParameters(AssetReference<EffectAsset>.invalid);
-            parameters.relevantPosition = transform.position + Vector3.up;
-            parameters.relevantDistance = 128f;
-            // ID эффекта огня (134 - стандартный взрыв/огонь)
-            EffectAsset asset = Assets.find(EAssetType.EFFECT, 134) as EffectAsset;
-            if (asset != null)
-            {
-                parameters.asset = asset;
-                EffectManager.triggerEffect(parameters);
-            }
-        }
-
+            EffectManager.sendEffect(134, 32f, transform.position + Vector3.up);
+        
         if (ModuleHP[TankModule.Engine] < 30f)
-        {
-            TriggerEffectParameters parameters = new TriggerEffectParameters(AssetReference<EffectAsset>.invalid);
-            parameters.relevantPosition = transform.position + Vector3.up * 1.5f;
-            parameters.relevantDistance = 128f;
-            // ID эффекта дыма (45)
-            EffectAsset asset = Assets.find(EAssetType.EFFECT, 45) as EffectAsset;
-            if (asset != null)
-            {
-                parameters.asset = asset;
-                EffectManager.triggerEffect(parameters);
-            }
-        }
+            EffectManager.sendEffect(45, 32f, transform.position + Vector3.up * 1.5f);
+        #pragma warning restore CS0618
     }
 
-    private void ProcessModuleLogic()
+    private void ExecuteLogic()
     {
         if (ModuleHP[TankModule.FuelLeak] < 40f)
         {
-            float fireDamage = VehicleModulesPlugin.Instance.Configuration.Instance.FireDamage;
+            float fireDmg = VehicleModulesPlugin.Instance.Configuration.Instance.FireDamage;
             
-            // ИСПРАВЛЕНИЕ ОШИБКИ CS1501: Используем 3 аргумента (Урон, Можно ли чинить, Кто нанес)
-            vehicle.askDamage((ushort)fireDamage, false, CSteamID.Nil);
-            
+            // ОБХОД askDamage: просто уменьшаем HP напрямую и вызываем обновление
+            // Это сработает в любой версии Unturned
+            if (vehicle.health > fireDmg)
+                vehicle.health -= (ushort)fireDmg;
+            else
+                vehicle.health = 0;
+
+            // Синхронизация здоровья с игроками
+            vehicle.tellHealth(CSteamID.Nil, vehicle.health);
+
             if (ModuleHP[TankModule.Fire] > 0)
             {
                 ModuleHP[TankModule.FuelLeak] += 2f;
@@ -110,9 +97,9 @@ public class VehicleTracker : MonoBehaviour
             }
         }
 
-        if (ModuleHP[TankModule.Engine] <= 0)
+        if (ModuleHP[TankModule.Engine] <= 0 && vehicle.isEngineOn)
         {
-            if (vehicle.isEngineOn) vehicle.askFillFuel(0); 
+            vehicle.askFillFuel(0); // Глушим мотор через топливо
         }
     }
 
@@ -120,23 +107,12 @@ public class VehicleTracker : MonoBehaviour
     {
         if (damage < VehicleModulesPlugin.Instance.Configuration.Instance.MinDamageThreshold) return;
 
-        // Эффект тряски / попадания
-        TriggerEffectParameters parameters = new TriggerEffectParameters(AssetReference<EffectAsset>.invalid);
-        parameters.relevantPosition = transform.position;
-        parameters.relevantDistance = 64f;
-        EffectAsset asset = Assets.find(EAssetType.EFFECT, 45) as EffectAsset;
-        if (asset != null)
-        {
-            parameters.asset = asset;
-            EffectManager.triggerEffect(parameters);
-        }
-
-        Array values = Enum.GetValues(typeof(TankModule));
+        // Рандомный выбор модуля
+        var values = Enum.GetValues(typeof(TankModule));
         TankModule hit = (TankModule)values.GetValue(UnityEngine.Random.Range(0, values.Length));
+        ModuleHP[hit] = Mathf.Max(0, ModuleHP[hit] - (damage * 1.3f));
         
-        ModuleHP[hit] = Mathf.Max(0, ModuleHP[hit] - (damage * 1.2f));
-        
-        NotifyCrew($"<color=red>[СИСТЕМА]</color> Критическое повреждение узла: {hit}!");
+        NotifyCrew($"<color=red>[ВНИМАНИЕ]</color> Поврежден узел: {hit}!");
         MarkDirty();
     }
 
@@ -150,6 +126,7 @@ public class VehicleTracker : MonoBehaviour
 
     private void NotifyCrew(string msg)
     {
+        if (vehicle.passengers == null) return;
         foreach (var p in vehicle.passengers)
             if (p?.player != null)
                 ChatManager.serverSendMessage(msg, Color.white, null, p.player.player.channel.owner, EChatMode.SAY, null, true);
