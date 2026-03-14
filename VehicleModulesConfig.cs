@@ -9,7 +9,6 @@ namespace VehicleModulesSystem
         public ushort RepairStationBarricadeId;
         public float RepairStationRadius;
 
-        // Шансы поломок (от 0.0 до 1.0)
         public float ChanceFuelLeak;
         public float ChanceTransmission;
         public float ChanceGunBroken;
@@ -17,7 +16,7 @@ namespace VehicleModulesSystem
         public float ChanceSmoke;
         public float ChanceStun;
 
-        public void Defaults()
+        public void LoadDefaults()
         {
             TargetedVehicleIds = new List<ushort> { 120, 121, 137 };
             RepairStationBarricadeId = 55000;
