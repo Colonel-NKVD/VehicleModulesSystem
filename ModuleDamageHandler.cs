@@ -66,27 +66,10 @@ namespace VehicleModulesSystem
             s.IsSmoking = true;
             while (s.IsSmoking && v != null && !v.isExploded)
             {
+                // Оставляем только визуал задымления
                 EffectManager.sendEffect(110, 128, v.transform.position + Vector3.up * 1.5f);
                 
-                foreach (var p in v.passengers)
-                {
-                    if (p.player != null)
-                    {
-                        // Прямое управление кислородом через поле life
-                        // Срезаем кислород до 0, если дым густой
-                        if (p.player.player.life.oxygen > 0)
-                        {
-                            p.player.player.life.oxygen = (byte)Mathf.Max(0, p.player.player.life.oxygen - 20);
-                        }
-
-                        // Если кислород кончился, наносим урон. 
-                        // Вместо SUFFOCATION используем BREATH, он есть во всех версиях.
-                        if (p.player.player.life.oxygen == 0)
-                        {
-                            p.player.player.life.askDamage(15, Vector3.up, EDeathCause.BREATH, ELimb.SPINE, CSteamID.Nil, out EPlayerKill kill);
-                        }
-                    }
-                }
+                // Вся логика с кислородом убрана, чтобы не тревожить readonly свойства
                 yield return new WaitForSeconds(2.0f); 
             }
         }
@@ -96,7 +79,6 @@ namespace VehicleModulesSystem
             s.IsOnFire = true;
             while (s.IsOnFire && v != null && !v.isExploded)
             {
-                // Огонь поднят профессионально высоко
                 EffectManager.sendEffect(139, 128, v.transform.position + Vector3.up * 2.5f);
                 EffectManager.sendEffect(139, 128, v.transform.position + v.transform.forward * 2.5f + Vector3.up * 2.0f);
                 EffectManager.sendEffect(139, 128, v.transform.position - v.transform.forward * 2.5f + Vector3.up * 2.0f);
@@ -116,7 +98,6 @@ namespace VehicleModulesSystem
             {
                 if (p.player != null)
                 {
-                    // Для взрыва используем CHARGE или GRANADE
                     p.player.player.life.askDamage(80, Vector3.up, EDeathCause.CHARGE, ELimb.SPINE, CSteamID.Nil, out EPlayerKill k);
                 }
             }
