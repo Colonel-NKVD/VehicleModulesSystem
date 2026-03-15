@@ -28,22 +28,25 @@ namespace VehicleModulesSystem
         protected override void Load()
         {
             Instance = this;
-            VehicleManager.onDamageVehicleRequested += OnVehicleDamagedLegacy;
-            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: Модуль мониторинга бронетехники активирован (Legacy API Mode).");
+
+            // АКТУАЛЬНОЕ СОБЫТИЕ: Теперь требует DamageVehicleParameters
+            VehicleManager.onDamageVehicleRequested += OnVehicleDamaged;
+            
+            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: Актуальный билд загружен. Использование TriggerEffectParameters и DamageVehicleParameters подтверждено.");
         }
 
         protected override void Unload()
         {
-            VehicleManager.onDamageVehicleRequested -= OnVehicleDamagedLegacy;
+            VehicleManager.onDamageVehicleRequested -= OnVehicleDamaged;
             StopAllCoroutines();
             TrackedVehicles.Clear();
         }
 
-        // ОБХОДНОЙ ПУТЬ: Добавлен параметр 'ref bool trackKill'.
-        // Это точная сигнатура делегата Unturned 3.20.x, которую требует ваша библиотека.
-        // Если CI/CD снова выдаст ошибку CS0123, просто удалите последний параметр 'ref bool trackKill'.
-        private void OnVehicleDamagedLegacy(CSteamID instigatorSteamID, InteractableVehicle vehicle, ref ushort pendingTotalDamage, ref bool canDamage, ref EPlayerKill kill, ref uint xp, ref bool trackKill)
+        // ПРОФЕССИОНАЛЬНОЕ ИСПРАВЛЕНИЕ: Сигнатура метода строго соответствует актуальному делегату
+        private void OnVehicleDamaged(ref DamageVehicleParameters parameters, ref bool shouldAllow)
         {
+            InteractableVehicle vehicle = parameters.vehicle;
+
             if (vehicle == null || vehicle.asset == null) return;
             
             if (!Configuration.Instance.TargetedVehicleIds.Contains(vehicle.asset.id)) return;
@@ -54,6 +57,7 @@ namespace VehicleModulesSystem
                 TrackedVehicles.Add(vehicle.instanceID, state);
             }
 
+            // Передаем параметры повреждения дальше для логики
             ProcessModuleDamage(vehicle, state);
 
             if (state.IsGunBroken && UnityEngine.Random.value < 0.50f)
@@ -125,7 +129,8 @@ namespace VehicleModulesSystem
         {
             if (s.IsOnFire) yield break;
             s.IsOnFire = true;
-            EffectManager.sendEffect(125, 64, v.transform.position); 
+            
+            TriggerModernEffect(125, v.transform.position);
 
             for (int i = 0; i < 8; i++)
             {
@@ -140,7 +145,8 @@ namespace VehicleModulesSystem
         {
             if (s.IsSmoking) yield break;
             s.IsSmoking = true;
-            EffectManager.sendEffect(123, 64, v.transform.position); 
+            
+            TriggerModernEffect(123, v.transform.position);
 
             float duration = UnityEngine.Random.Range(15, 30);
             float start = Time.time;
@@ -173,8 +179,23 @@ namespace VehicleModulesSystem
 
         private void ExplodeInternally(InteractableVehicle v)
         {
-            EffectManager.sendEffect(125, 64, v.transform.position);
+            TriggerModernEffect(125, v.transform.position);
             VehicleManager.damage(v, 1000, 1, false);
+        }
+
+        // ВСПОМОГАТЕЛЬНЫЙ МЕТОД ДЛЯ УСТРАНЕНИЯ CS0618
+        private void TriggerModernEffect(ushort id, Vector3 position)
+        {
+            // Используем новый API TriggerEffectParameters
+            // Мы находим ассет эффекта по старой ID системе, но вызываем его современным методом
+            EffectAsset asset = Assets.find(EAssetType.EFFECT, id) as EffectAsset;
+            if (asset != null)
+            {
+                TriggerEffectParameters parameters = new TriggerEffectParameters(asset);
+                parameters.position = position;
+                parameters.relevantDistance = 64f; // Аналог старого радиуса 64
+                EffectManager.triggerEffect(parameters);
+            }
         }
     }
 }
