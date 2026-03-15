@@ -46,28 +46,26 @@ namespace VehicleModulesSystem
                 Rocket.Core.Logging.Logger.Log($"[CRIT] {v.asset.vehicleName}: Орудие выведено из строя.");
             }
 
-            // 4. ПОЖАР (ID 139 - Искры/Обломки)
+            // 4. ПОЖАР (ID 139)
             if (!s.IsOnFire && roll < (cfg.ChanceFire + intensity))
             {
                 SendChat(v, "!!! ПОЖАР В МЕХАНИЗМАХ !!!", Color.red);
                 VehicleModulesPlugin.Instance.StartCoroutine(FireRoutine(v, s));
             }
 
-            // 5. ЗАДЫМЛЕНИЕ (ID 110 - Дым. граната)
+            // 5. ЗАДЫМЛЕНИЕ (ID 110)
             if (!s.IsSmoking && roll < (cfg.ChanceSmoke + intensity))
             {
                 SendChat(v, "[ВНИМАНИЕ] Задымление боевого отделения!", Color.gray);
                 VehicleModulesPlugin.Instance.StartCoroutine(SmokeRoutine(v, s));
             }
 
-            // 6. КОНТУЗИЯ (STUN)
+            // 6. КОНТУЗИЯ
             if (!s.IsStunned && roll < (cfg.ChanceStun + intensity))
             {
                 VehicleModulesPlugin.Instance.StartCoroutine(StunRoutine(v, s));
             }
         }
-
-        // --- ЛОГИКА МОДУЛЕЙ С ЛОГГИРОВАНИЕМ ---
 
         private static IEnumerator StunRoutine(InteractableVehicle v, VehicleState s)
         {
@@ -82,7 +80,6 @@ namespace VehicleModulesSystem
                 foreach (var p in v.passengers)
                     if (p.player != null) p.player.player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
             s.IsStunned = false;
-            SendChat(v, "[СИСТЕМА] Экипаж пришел в сознание.", Color.green);
         }
 
         private static IEnumerator SmokeRoutine(InteractableVehicle v, VehicleState s)
@@ -90,7 +87,8 @@ namespace VehicleModulesSystem
             s.IsSmoking = true;
             while (s.IsSmoking && v != null && !v.isExploded)
             {
-                EffectManager.sendEffect(110, 128, v.transform.position);
+                // Убрано значение 128
+                EffectManager.sendEffect(110, v.transform.position);
                 foreach (var p in v.passengers)
                     if (p.player != null) p.player.player.life.askSuffocate(15);
                 yield return new WaitForSeconds(1.5f); 
@@ -102,7 +100,8 @@ namespace VehicleModulesSystem
             s.IsOnFire = true;
             while (s.IsOnFire && v != null && !v.isExploded)
             {
-                EffectManager.sendEffect(139, 128, v.transform.position + Vector3.up);
+                // Убрано значение 128
+                EffectManager.sendEffect(139, v.transform.position + Vector3.up);
                 VehicleManager.damage(v, 120, 1, false);
                 yield return new WaitForSeconds(0.8f);
             }
@@ -112,7 +111,8 @@ namespace VehicleModulesSystem
         {
             while (s.IsFuelTankBroken && v != null && !v.isExploded && v.fuel > 0)
             {
-                EffectManager.sendEffect(16, 128, v.transform.position);
+                // Убрано значение 128
+                EffectManager.sendEffect(16, v.transform.position);
                 v.fuel = (ushort)Mathf.Max(0, v.fuel - 35);
                 VehicleManager.sendVehicleFuel(v, v.fuel);
                 yield return new WaitForSeconds(1.0f);
@@ -126,15 +126,14 @@ namespace VehicleModulesSystem
             {
                 s.IsTransmissionBroken = true;
                 v.batteryCharge = 0;
-                VehicleManager.sendVehicleBattery(v, 0);
+                VehicleManager.sendVehicleFuel(v, v.fuel); 
                 SendChat(v, "!!! КРИТ: Трансмиссия рассыпалась. Питание потеряно !!!", Color.red);
-                Rocket.Core.Logging.Logger.Log($"[CRIT] {v.asset.vehicleName}: Аккумулятор выведен из строя поломкой трансмиссии.");
             }
         }
 
         private static void ExplodeBreach(InteractableVehicle v)
         {
-            EffectManager.sendEffect(45, 128, v.transform.position);
+            EffectManager.sendEffect(45, v.transform.position);
             VehicleManager.damage(v, 800, 1, false);
             foreach (var p in v.passengers)
                 if (p.player != null)
