@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections;
 using SDG.Unturned;
 using UnityEngine;
@@ -11,53 +12,83 @@ namespace VehicleModulesSystem
         public static void ProcessDamage(InteractableVehicle v, VehicleState s, int dmg)
         {
             var cfg = VehicleModulesPlugin.Instance.Configuration.Instance;
-            float roll = Random.value;
-            float intensity = dmg / 500f;
-
+            
+            // Если танк горит, экипажу не до новых поломок
             if (s.IsOnFire) return;
 
-            if (!s.IsFuelTankBroken && roll < (cfg.ChanceFuelLeak + intensity))
+            // 1. БАЛАНС УРОНА: Ограничиваем влияние "гигантского" урона от взрывов.
+            // Максимальный бонус к шансу поломки от одного удара составит +25% (0.25f).
+            float intensity = Mathf.Clamp(dmg / 1500f, 0f, 0.25f); 
+
+            // 2. КОНТУЗИЯ (70% базовый шанс + интенсивность удара)
+            if (!s.IsStunned && Random.value < (0.70f + intensity))
             {
-                s.IsFuelTankBroken = true;
-                SendChat(v, "!!! КРИТ: Пробит топливный бак !!!", Color.red);
-                VehicleModulesPlugin.Instance.StartCoroutine(FuelRoutine(v, s));
+                VehicleModulesPlugin.Instance.StartCoroutine(StunRoutine(v, s));
             }
 
-            if (!s.IsTransmissionBroken && roll < (cfg.ChanceTransmission + intensity))
-            {
-                SendChat(v, "[СИСТЕМА] Трансмиссия повреждена!", Color.yellow);
-                VehicleModulesPlugin.Instance.StartCoroutine(TransRoutine(v, s));
-            }
+            // 3. ЛИМИТ ПОЛОМОК: Танк не может развалиться весь от одного снаряда.
+            int criticalsThisHit = 0;
+            int maxCriticals = dmg > 600 ? 2 : 1; // Мощный взрыв ломает до 2 модулей, обычный - 1
 
-            if (s.IsGunBroken)
+            // 4. СИСТЕМА СПРАВЕДЛИВОГО РАНДОМА (Shuffle)
+            // Добавляем проверки в список, чтобы выбрать случайный модуль, который примет удар
+            List<System.Action> moduleChecks = new List<System.Action>
             {
-                if (Random.value < 0.40f) 
-                {
-                    ExplodeBreach(v);
-                    return; 
+                () => {
+                    if (!s.IsFuelTankBroken && Random.value < (cfg.ChanceFuelLeak + intensity)) {
+                        s.IsFuelTankBroken = true;
+                        SendChat(v, "!!! КРИТ: Пробит топливный бак !!!", Color.red);
+                        VehicleModulesPlugin.Instance.StartCoroutine(FuelRoutine(v, s));
+                        criticalsThisHit++;
+                    }
+                },
+                () => {
+                    if (!s.IsTransmissionBroken && Random.value < (cfg.ChanceTransmission + intensity)) {
+                        SendChat(v, "[СИСТЕМА] Трансмиссия повреждена!", Color.yellow);
+                        VehicleModulesPlugin.Instance.StartCoroutine(TransRoutine(v, s));
+                        criticalsThisHit++;
+                    }
+                },
+                () => {
+                    if (s.IsGunBroken) {
+                        if (Random.value < 0.25f) { // Взрыв казенника при повторном крите в орудие
+                            ExplodeBreach(v);
+                            criticalsThisHit++;
+                        }
+                    } else if (Random.value < (cfg.ChanceGunBroken + intensity)) {
+                        s.IsGunBroken = true;
+                        SendChat(v, "[СИСТЕМА] Орудие заклинило!", Color.red);
+                        criticalsThisHit++;
+                    }
                 }
-            }
-            else if (roll < (cfg.ChanceGunBroken + intensity))
-            {
-                s.IsGunBroken = true;
-                SendChat(v, "[СИСТЕМА] Орудие заклинило!", Color.red);
+            };
+
+            // Перемешиваем список, чтобы ни у одного модуля не было "приоритета"
+            for (int i = 0; i < moduleChecks.Count; i++) {
+                System.Action temp = moduleChecks[i];
+                int randomIndex = Random.Range(i, moduleChecks.Count);
+                moduleChecks[i] = moduleChecks[randomIndex];
+                moduleChecks[randomIndex] = temp;
             }
 
-            if (!s.IsOnFire && roll < (cfg.ChanceFire + intensity))
+            // Выполняем проверки до исчерпания лимита поломок
+            foreach (var check in moduleChecks) {
+                if (criticalsThisHit >= maxCriticals) break;
+                check.Invoke();
+            }
+
+            // 5. РЕДКИЕ ЯВЛЕНИЯ: Пожар и Дым
+            // Пожар имеет минимальный шанс прока (3% база + небольшая часть от урона)
+            if (!s.IsOnFire && Random.value < (0.03f + (intensity * 0.5f)))
             {
                 SendChat(v, "!!! ПОЖАР В БОЕВОМ ОТДЕЛЕНИИ !!!", Color.red);
                 VehicleModulesPlugin.Instance.StartCoroutine(FireRoutine(v, s));
             }
-
-            if (!s.IsSmoking && roll < (cfg.ChanceSmoke + intensity))
+            // Задымление срабатывает чаще пожара, но реже обычных поломок
+            else if (!s.IsSmoking && Random.value < (cfg.ChanceSmoke + intensity))
             {
-                SendChat(v, "[ВНИМАНИЕ] Задымление!", Color.gray);
+                SendChat(v, "[ВНИМАНИЕ] Задымление боевого отделения!", Color.gray);
                 VehicleModulesPlugin.Instance.StartCoroutine(SmokeRoutine(v, s));
-            }
-
-            if (!s.IsStunned && roll < (cfg.ChanceStun + intensity))
-            {
-                VehicleModulesPlugin.Instance.StartCoroutine(StunRoutine(v, s));
             }
         }
 
@@ -66,10 +97,15 @@ namespace VehicleModulesSystem
             s.IsSmoking = true;
             while (s.IsSmoking && v != null && !v.isExploded)
             {
-                // Оставляем только визуал задымления
                 EffectManager.sendEffect(110, 128, v.transform.position + Vector3.up * 1.5f);
                 
-                // Вся логика с кислородом убрана, чтобы не тревожить readonly свойства
+                foreach (var p in v.passengers)
+                {
+                    if (p.player != null)
+                    {
+                        p.player.player.life.askDamage(10, Vector3.up, EDeathCause.BREATH, ELimb.SPINE, CSteamID.Nil, out EPlayerKill kill);
+                    }
+                }
                 yield return new WaitForSeconds(2.0f); 
             }
         }
@@ -79,9 +115,18 @@ namespace VehicleModulesSystem
             s.IsOnFire = true;
             while (s.IsOnFire && v != null && !v.isExploded)
             {
-                EffectManager.sendEffect(139, 128, v.transform.position + Vector3.up * 2.5f);
-                EffectManager.sendEffect(139, 128, v.transform.position + v.transform.forward * 2.5f + Vector3.up * 2.0f);
-                EffectManager.sendEffect(139, 128, v.transform.position - v.transform.forward * 2.5f + Vector3.up * 2.0f);
+                // ПРОФЕССИОНАЛЬНОЕ РАСПРОСТРАНЕНИЕ ОГНЯ
+                // Каждый тик (0.8с) мы спавним 3 эффекта искр/огня в СЛУЧАЙНЫХ координатах корпуса.
+                // Танк будет казаться полностью охваченным пламенем со всех сторон.
+                for (int i = 0; i < 3; i++)
+                {
+                    Vector3 randomOffset = 
+                        v.transform.right * Random.Range(-1.5f, 1.5f) +     // Ширина: от левого до правого борта
+                        v.transform.forward * Random.Range(-3.5f, 3.5f) +   // Длина: от кормы до носа
+                        Vector3.up * Random.Range(1.8f, 3.0f);              // Высота: по всей верхней проекции
+
+                    EffectManager.sendEffect(139, 128, v.transform.position + randomOffset);
+                }
 
                 VehicleManager.damage(v, 130, 1, false);
                 yield return new WaitForSeconds(0.8f);
@@ -109,7 +154,9 @@ namespace VehicleModulesSystem
             SendChat(v, ">> ЭКИПАЖ КОНТУЖЕН <<", Color.yellow);
             foreach (var p in v.passengers)
                 if (p.player != null) p.player.player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, true);
+            
             yield return new WaitForSeconds(5.0f);
+            
             if (v != null)
                 foreach (var p in v.passengers)
                     if (p.player != null) p.player.player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
