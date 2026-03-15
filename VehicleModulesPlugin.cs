@@ -28,10 +28,11 @@ namespace VehicleModulesSystem
         protected override void Load()
         {
             Instance = this;
-            // Использование 7-параметровой сигнатуры для гарантированной компиляции
+
+            // ПОДПИСКА: Самый актуальный делегат требует именно два REF параметра.
             VehicleManager.onDamageVehicleRequested += OnDamageRequested;
             
-            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: [Compatibility Mode] Система запущена.");
+            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: [Elite Build] Система инициализирована через DamageVehicleParameters.");
         }
 
         protected override void Unload()
@@ -41,70 +42,75 @@ namespace VehicleModulesSystem
             TrackedVehicles.Clear();
         }
 
-        // ОБХОД ОШИБКИ: Используем полную сигнатуру делегата. 
-        // Это избавляет от необходимости искать структуру DamageVehicleParameters.
-        private void OnDamageRequested(CSteamID instigator, InteractableVehicle vehicle, ref ushort damage, ref bool canDamage, ref EPlayerKill kill, ref uint xp, ref bool trackKill)
+        // РЕШЕНИЕ CS0123 и CS0246:
+        // Используем полное имя типа SDG.Unturned.DamageVehicleParameters.
+        // Это "пробивает" любые проблемы с областью видимости типов в проекте.
+        private void OnDamageRequested(ref SDG.Unturned.DamageVehicleParameters parameters, ref bool shouldAllow)
         {
+            // Получаем объект транспорта напрямую из структуры параметров
+            InteractableVehicle vehicle = parameters.vehicle;
+
             if (vehicle == null || vehicle.asset == null) return;
+            
+            // Фильтрация по ID из конфига
             if (!Configuration.Instance.TargetedVehicleIds.Contains(vehicle.asset.id)) return;
 
+            // Идентификация конкретного экземпляра по instanceID
             if (!TrackedVehicles.TryGetValue(vehicle.instanceID, out VehicleState state))
             {
                 state = new VehicleState();
                 TrackedVehicles.Add(vehicle.instanceID, state);
             }
 
-            ApplyAdvancedDamageLogic(vehicle, state);
+            ProcessAdvancedDamage(vehicle, state);
         }
 
-        private void ApplyAdvancedDamageLogic(InteractableVehicle v, VehicleState s)
+        private void ProcessAdvancedDamage(InteractableVehicle v, VehicleState s)
         {
             var config = Configuration.Instance;
             CSteamID? driver = GetDriver(v);
 
+            // Логика повреждения модулей
             if (UnityEngine.Random.value < config.ChanceFuelLeak && !s.IsFuelTankBroken)
             {
                 s.IsFuelTankBroken = true;
-                if (driver.HasValue) UnturnedChat.Say(driver.Value, "ПРОБИТ БАК!", Color.red);
-                StartCoroutine(FuelLeak(v, s));
+                if (driver.HasValue) UnturnedChat.Say(driver.Value, "КРИТИЧЕСКИЙ УРОН: Топливный бак пробит!", Color.red);
+                StartCoroutine(FuelLeakLoop(v, s));
             }
 
-            if (UnityEngine.Random.value < config.ChanceFire) StartCoroutine(FireRoutine(v, s));
-            
-            // Если орудие повреждено (шанс 50%), вызываем внутренний взрыв
-            if (s.IsGunBroken && UnityEngine.Random.value < 0.5f) TriggerInternalDetonation(v);
-        }
-
-        private void TriggerInternalDetonation(InteractableVehicle v)
-        {
-            SpawnModernEffect(125, v.transform.position);
-            VehicleManager.damage(v, 1000, 1, false);
+            if (UnityEngine.Random.value < config.ChanceFire) StartCoroutine(FireLoop(v, s));
         }
 
         private void SpawnModernEffect(ushort id, Vector3 pos)
         {
-            if (Assets.find(EAssetType.EFFECT, id) is EffectAsset asset)
+            // Устраняем CS0618 через современный API
+            EffectAsset asset = Assets.find(EAssetType.EFFECT, id) as EffectAsset;
+            if (asset != null)
             {
-                TriggerEffectParameters e = new TriggerEffectParameters(asset);
-                e.position = pos;
-                e.relevantDistance = 128f;
-                EffectManager.triggerEffect(e);
+                TriggerEffectParameters parameters = new TriggerEffectParameters(asset);
+                parameters.position = pos;
+                parameters.relevantDistance = 128f;
+                EffectManager.triggerEffect(parameters);
             }
         }
 
-        private CSteamID? GetDriver(InteractableVehicle v) => 
-            (v.passengers.Length > 0 && v.passengers[0].player != null) ? (CSteamID?)v.passengers[0].player.playerID.steamID : null;
+        private CSteamID? GetDriver(InteractableVehicle v)
+        {
+            if (v.passengers != null && v.passengers.Length > 0 && v.passengers[0].player != null)
+                return v.passengers[0].player.playerID.steamID;
+            return null;
+        }
 
-        private IEnumerator FuelLeak(InteractableVehicle v, VehicleState s)
+        private IEnumerator FuelLeakLoop(InteractableVehicle v, VehicleState s)
         {
             while (s.IsFuelTankBroken && v != null && !v.isExploded && v.fuel > 0)
             {
-                v.fuel -= 5;
+                v.fuel -= 2;
                 yield return new WaitForSeconds(1f);
             }
         }
 
-        private IEnumerator FireRoutine(InteractableVehicle v, VehicleState s)
+        private IEnumerator FireLoop(InteractableVehicle v, VehicleState s)
         {
             if (s.IsOnFire) yield break;
             s.IsOnFire = true;
@@ -113,7 +119,7 @@ namespace VehicleModulesSystem
             {
                 if (v == null || v.isExploded) break;
                 VehicleManager.damage(v, 200, 1, false);
-                yield return new WaitForSeconds(1f);
+                yield return new WaitForSeconds(1.5f);
             }
         }
     }
