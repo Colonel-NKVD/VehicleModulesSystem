@@ -30,111 +30,128 @@ namespace VehicleModulesSystem
         {
             Instance = this;
             
-            // Запускаем наблюдатель с задержкой в 2 секунды, чтобы избежать NullReferenceException при загрузке конфига
-            StartCoroutine(StartObserverWithDelay());
-            
-            Rocket.Core.Logging.Logger.Log("!!! VEHICLE MODULES DEBUG VERSION LOADED !!!");
+            // Логируем начало загрузки
+            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: Инициализация плагина...");
+
+            // Запускаем через безопасную корутину-загрузчик
+            StartCoroutine(SafeStartSequence());
         }
 
-        private IEnumerator StartObserverWithDelay()
+        private IEnumerator SafeStartSequence()
         {
-            yield return new WaitForSeconds(2.0f);
+            // Ждем 3 секунды, чтобы Unturned и RocketMod прогрузили все ассеты и конфиги
+            yield return new WaitForSeconds(3.0f);
+
+            if (Configuration.Instance == null)
+            {
+                Rocket.Core.Logging.Logger.LogError("КРИТИЧЕСКАЯ ОШИБКА: Конфигурация не найдена!");
+                yield break;
+            }
+
+            Rocket.Core.Logging.Logger.Log($"Загружено ID техники для отслеживания: {Configuration.Instance.TargetedVehicleIds.Count}");
+            
+            // Запускаем основной цикл сканирования (каждые 5 секунд по ТЗ)
             StartCoroutine(VehicleAdvancedObserver());
-            Rocket.Core.Logging.Logger.Log("[Debug] Наблюдатель успешно запущен через 2 секунды после старта.");
+            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: Наблюдатель успешно запущен.");
         }
 
         protected override void Unload()
         {
             StopAllCoroutines();
             TrackedVehicles.Clear();
+            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: Плагин выгружен.");
         }
 
         private IEnumerator VehicleAdvancedObserver()
         {
             while (true)
             {
-                // Проверяем существование конфига, чтобы избежать NullRef
-                if (Configuration == null || Configuration.Instance == null || Configuration.Instance.TargetedVehicleIds == null)
+                // Проверка на наличие машин в мире
+                if (VehicleManager.vehicles == null)
                 {
-                    yield return new WaitForSeconds(1.0f);
+                    Rocket.Core.Logging.Logger.LogWarning("VehicleManager.vehicles еще не инициализирован.");
+                    yield return new WaitForSeconds(5.0f);
                     continue;
                 }
 
-                // Работаем с копией списка, чтобы не вызвать ошибку при спавне/удалении машин
-                var currentVehicles = VehicleManager.vehicles.ToList();
+                Rocket.Core.Logging.Logger.Log($"[Debug] Сканирование техники... (Всего в мире: {VehicleManager.vehicles.Count})");
 
-                foreach (var vehicle in currentVehicles)
+                // Работаем с копией списка для безопасности
+                var vehiclesInWorld = VehicleManager.vehicles.ToList();
+
+                foreach (var vehicle in vehiclesInWorld)
                 {
                     if (vehicle == null || vehicle.asset == null || vehicle.isExploded) continue;
 
-                    // Фильтр по ID
+                    // Проверка: входит ли машина в список целей
                     if (!Configuration.Instance.TargetedVehicleIds.Contains(vehicle.asset.id)) continue;
 
-                    // ВЕШАЕМ ДАТЧИК (Регистрация)
+                    // УСТАНОВКА ДАТЧИКА
                     if (!TrackedVehicles.TryGetValue(vehicle.instanceID, out VehicleState state))
                     {
                         state = new VehicleState { LastHealth = vehicle.health };
                         TrackedVehicles.Add(vehicle.instanceID, state);
-                        Rocket.Core.Logging.Logger.Log($"[Debug] Датчик установлен на: {vehicle.asset.vehicleName} ID:{vehicle.instanceID}");
+                        Rocket.Core.Logging.Logger.Log($"[ДАТЧИК] Установлен на {vehicle.asset.vehicleName} (ID: {vehicle.instanceID})");
                         continue;
                     }
 
-                    // --- DEBUG LOGIC: ШАНС ПОЛОМКИ КАЖДЫЕ 5 СЕКУНД ---
-                    // 30% шанс, что сработает поломка модуля принудительно
-                    if (UnityEngine.Random.value < 0.30f)
+                    // --- DEBUG: ГАРАНТИРОВАННАЯ СЛУЧАЙНАЯ ПОЛОМКА (раз в 5 сек) ---
+                    if (UnityEngine.Random.value < 0.25f) // 25% шанс поломки при каждом сканировании
                     {
-                        Rocket.Core.Logging.Logger.Log($"[Debug] Тестовая попытка поломки модуля для {vehicle.instanceID}");
-                        ExecuteDamageLogic(vehicle, state, 15);
+                        Rocket.Core.Logging.Logger.Log($"[Debug] Искусственный износ для {vehicle.instanceID}");
+                        ExecuteDamageLogic(vehicle, state, 10);
                     }
 
-                    // Обычное отслеживание урона
+                    // Проверка реального урона
                     if (vehicle.health < state.LastHealth)
                     {
-                        ExecuteDamageLogic(vehicle, state, state.LastHealth - vehicle.health);
+                        int dmg = state.LastHealth - vehicle.health;
+                        Rocket.Core.Logging.Logger.Log($"[УРОН] Машина {vehicle.instanceID} получила {dmg} урона.");
+                        ExecuteDamageLogic(vehicle, state, dmg);
                     }
 
-                    // Принудительный стоп при сломанной коробке
-                    if (state.IsTransmissionBroken) StopPhysical(vehicle);
+                    // Принудительный стоп при поломке трансмиссии
+                    if (state.IsTransmissionBroken)
+                    {
+                        var rb = vehicle.GetComponent<Rigidbody>();
+                        if (rb != null)
+                        {
+                            rb.velocity = Vector3.zero;
+                            rb.angularVelocity = Vector3.zero;
+                        }
+                    }
 
                     state.LastHealth = vehicle.health;
                 }
 
-                // Сканирование и дебаг-урон каждые 5 секунд по ТЗ
                 yield return new WaitForSeconds(5.0f);
             }
         }
 
         private void ExecuteDamageLogic(InteractableVehicle v, VehicleState s, int damage)
         {
-            // В Debug версии шансы ОЧЕНЬ высокие (0.5 бонус), чтобы сразу увидеть результат
-            float chanceBonus = 0.5f;
+            // Шансы в дебаг-версии завышены (0.4 бонус)
+            float bonus = 0.4f;
 
-            if (!s.IsFuelTankBroken && UnityEngine.Random.value < (0.1f + chanceBonus))
+            if (!s.IsFuelTankBroken && UnityEngine.Random.value < (0.1f + bonus))
             {
                 s.IsFuelTankBroken = true;
-                Notify(v, "DEBUG: БАК ПРОБИТ!", Color.red);
+                Rocket.Core.Logging.Logger.Log($"[СОБЫТИЕ] У машины {v.instanceID} пробит бак!");
+                Notify(v, "ВНИМАНИЕ: Пробит топливный бак!", Color.red);
                 StartCoroutine(FuelLeakRoutine(v, s));
             }
 
-            if (!s.IsTransmissionBroken && UnityEngine.Random.value < (0.1f + chanceBonus))
+            if (!s.IsTransmissionBroken && UnityEngine.Random.value < (0.1f + bonus))
             {
                 s.IsTransmissionBroken = true;
-                Notify(v, "DEBUG: ТРАНСМИССИЯ ВЫБИТА!", Color.red);
+                Rocket.Core.Logging.Logger.Log($"[СОБЫТИЕ] У машины {v.instanceID} выбита трансмиссия!");
+                Notify(v, "КРИТ: Трансмиссия уничтожена!", Color.red);
             }
 
-            if (!s.IsOnFire && UnityEngine.Random.value < (0.05f + chanceBonus))
+            if (!s.IsOnFire && UnityEngine.Random.value < (0.05f + bonus))
             {
+                Rocket.Core.Logging.Logger.Log($"[СОБЫТИЕ] Машина {v.instanceID} загорелась!");
                 StartCoroutine(FireRoutine(v, s));
-            }
-        }
-
-        private void StopPhysical(InteractableVehicle v)
-        {
-            var rb = v.GetComponent<Rigidbody>();
-            if (rb != null)
-            {
-                rb.velocity = Vector3.zero;
-                rb.angularVelocity = Vector3.zero;
             }
         }
 
@@ -143,7 +160,7 @@ namespace VehicleModulesSystem
             while (s.IsFuelTankBroken && v != null && !v.isExploded && v.fuel > 0)
             {
                 v.fuel = (ushort)Mathf.Max(0, v.fuel - 10);
-                yield return new WaitForSeconds(1f);
+                yield return new WaitForSeconds(1.0f);
             }
         }
 
@@ -151,18 +168,16 @@ namespace VehicleModulesSystem
         {
             s.IsOnFire = true;
             s.IsSmoking = true;
-            Notify(v, "DEBUG: ПОЖАР В МТО!", Color.red);
-
             while (s.IsOnFire && v != null && !v.isExploded)
             {
-                TriggerEffect(125, v.transform.position);
-                VehicleManager.damage(v, 100, 1, false);
+                TriggerModernEffect(125, v.transform.position);
+                VehicleManager.damage(v, 120, 1, false);
                 yield return new WaitForSeconds(1.5f);
             }
             s.IsOnFire = false;
         }
 
-        private void TriggerEffect(ushort id, Vector3 pos)
+        private void TriggerModernEffect(ushort id, Vector3 pos)
         {
             if (Assets.find(EAssetType.EFFECT, id) is EffectAsset asset)
             {
