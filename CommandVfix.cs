@@ -31,12 +31,14 @@ namespace VehicleModulesSystem
             float radius = VehicleModulesPlugin.Instance.Configuration.Instance.RepairStationRadius;
             ushort stationId = VehicleModulesPlugin.Instance.Configuration.Instance.RepairStationBarricadeId;
 
-            // Профессиональный поиск объектов в радиусе без тяжелой физики
-            List<Region3d> regions = new List<Region3d>();
+            // ПРОФЕССИОНАЛЬНОЕ РЕШЕНИЕ: Использование RegionCoordinate
+            List<RegionCoordinate> regions = new List<RegionCoordinate>();
             Regions.getRegionsInRadius(player.Position, radius, regions);
+            
             foreach (var region in regions)
             {
-                if (BarricadeManager.tryGetRegion(region.x, region.y, region.plant, out BarricadeRegion br))
+                // ushort.MaxValue (65535) означает, что мы ищем на земле, а не на технике
+                if (BarricadeManager.tryGetRegion(region.x, region.y, ushort.MaxValue, out BarricadeRegion br))
                 {
                     foreach (var drop in br.drops)
                     {
@@ -76,7 +78,7 @@ namespace VehicleModulesSystem
                     
                     v.askRepair(65000);
                     v.askFillFuel(65000);
-                    v.batteryCharge = 100;
+                    v.batteryCharge = 10000;
                     
                     UnturnedChat.Say(p, "ТЕХНИКА ПОЛНОСТЬЮ ВОССТАНОВЛЕНА", Color.green);
                 }
