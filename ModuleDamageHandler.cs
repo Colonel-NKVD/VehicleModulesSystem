@@ -14,10 +14,8 @@ namespace VehicleModulesSystem
             float roll = Random.value;
             float intensity = dmg / 500f;
 
-            // Если танк уже горит, блокируем новые эффекты, чтобы не было «каши»
             if (s.IsOnFire) return;
 
-            // 1. ТОПЛИВНЫЙ БАК
             if (!s.IsFuelTankBroken && roll < (cfg.ChanceFuelLeak + intensity))
             {
                 s.IsFuelTankBroken = true;
@@ -25,18 +23,14 @@ namespace VehicleModulesSystem
                 VehicleModulesPlugin.Instance.StartCoroutine(FuelRoutine(v, s));
             }
 
-            // 2. ТРАНСМИССИЯ
             if (!s.IsTransmissionBroken && roll < (cfg.ChanceTransmission + intensity))
             {
                 SendChat(v, "[СИСТЕМА] Трансмиссия повреждена!", Color.yellow);
                 VehicleModulesPlugin.Instance.StartCoroutine(TransRoutine(v, s));
             }
 
-            // 3. ОРУДИЕ (Исправлено наложение)
             if (s.IsGunBroken)
             {
-                // Если орудие УЖЕ сломано, есть шанс взрыва казенника, 
-                // но мы не запускаем другие эффекты в этот тик
                 if (Random.value < 0.40f) 
                 {
                     ExplodeBreach(v);
@@ -49,21 +43,18 @@ namespace VehicleModulesSystem
                 SendChat(v, "[СИСТЕМА] Орудие заклинило!", Color.red);
             }
 
-            // 4. ПОЖАР
             if (!s.IsOnFire && roll < (cfg.ChanceFire + intensity))
             {
                 SendChat(v, "!!! ПОЖАР В БОЕВОМ ОТДЕЛЕНИИ !!!", Color.red);
                 VehicleModulesPlugin.Instance.StartCoroutine(FireRoutine(v, s));
             }
 
-            // 5. ЗАДЫМЛЕНИЕ (Исправлено)
             if (!s.IsSmoking && roll < (cfg.ChanceSmoke + intensity))
             {
                 SendChat(v, "[ВНИМАНИЕ] Задымление!", Color.gray);
                 VehicleModulesPlugin.Instance.StartCoroutine(SmokeRoutine(v, s));
             }
 
-            // 6. КОНТУЗИЯ
             if (!s.IsStunned && roll < (cfg.ChanceStun + intensity))
             {
                 VehicleModulesPlugin.Instance.StartCoroutine(StunRoutine(v, s));
@@ -75,20 +66,25 @@ namespace VehicleModulesSystem
             s.IsSmoking = true;
             while (s.IsSmoking && v != null && !v.isExploded)
             {
-                // Спавним дым прямо в центре корпуса
                 EffectManager.sendEffect(110, 128, v.transform.position + Vector3.up * 1.5f);
                 
                 foreach (var p in v.passengers)
                 {
                     if (p.player != null)
                     {
-                        // Как в антидропшоте: жестко забираем ресурс (кислород)
-                        if (p.player.player.life.oxygen > 10)
-                            p.player.player.life.askRestoredOxygen(0); // Сброс регенерации
-                        
-                        // Прямое уменьшение кислорода на 20 единиц за тик
-                        byte currentOxygen = p.player.player.life.oxygen;
-                        p.player.player.life.askDamage((byte)Mathf.Min(currentOxygen, 20), Vector3.up, EDeathCause.SUFFOCATION, ELimb.SPINE, CSteamID.Nil, out EPlayerKill kill);
+                        // Прямое управление кислородом через поле life
+                        // Срезаем кислород до 0, если дым густой
+                        if (p.player.player.life.oxygen > 0)
+                        {
+                            p.player.player.life.oxygen = (byte)Mathf.Max(0, p.player.player.life.oxygen - 20);
+                        }
+
+                        // Если кислород кончился, наносим урон. 
+                        // Вместо SUFFOCATION используем BREATH, он есть во всех версиях.
+                        if (p.player.player.life.oxygen == 0)
+                        {
+                            p.player.player.life.askDamage(15, Vector3.up, EDeathCause.BREATH, ELimb.SPINE, CSteamID.Nil, out EPlayerKill kill);
+                        }
                     }
                 }
                 yield return new WaitForSeconds(2.0f); 
@@ -100,7 +96,7 @@ namespace VehicleModulesSystem
             s.IsOnFire = true;
             while (s.IsOnFire && v != null && !v.isExploded)
             {
-                // ПОДНЯЛ ВЫШЕ: Огонь теперь на уровне 2-2.5 метров от земли
+                // Огонь поднят профессионально высоко
                 EffectManager.sendEffect(139, 128, v.transform.position + Vector3.up * 2.5f);
                 EffectManager.sendEffect(139, 128, v.transform.position + v.transform.forward * 2.5f + Vector3.up * 2.0f);
                 EffectManager.sendEffect(139, 128, v.transform.position - v.transform.forward * 2.5f + Vector3.up * 2.0f);
@@ -112,22 +108,20 @@ namespace VehicleModulesSystem
 
         private static void ExplodeBreach(InteractableVehicle v)
         {
-            // Мгновенный эффект взрыва
             EffectManager.sendEffect(45, 128, v.transform.position + Vector3.up * 2f);
             SendChat(v, "!!! РАЗРЫВ КАЗЕННИКА !!!", Color.red);
             
-            // Наносим урон машине и игрокам ОДИН РАЗ
             VehicleManager.damage(v, 1000, 1, false);
             foreach (var p in v.passengers)
             {
                 if (p.player != null)
                 {
+                    // Для взрыва используем CHARGE или GRANADE
                     p.player.player.life.askDamage(80, Vector3.up, EDeathCause.CHARGE, ELimb.SPINE, CSteamID.Nil, out EPlayerKill k);
                 }
             }
         }
 
-        // Остальные методы (Stun, Fuel, Trans, SendChat) остаются без изменений
         private static IEnumerator StunRoutine(InteractableVehicle v, VehicleState s)
         {
             s.IsStunned = true;
