@@ -18,7 +18,7 @@ namespace VehicleModulesSystem
         public bool IsTransmissionBroken;
         public bool IsGunBroken;
         public bool IsOnFire;
-        public bool IsSmoking; // ДОБАВЛЕНО: Теперь CommandVfix увидит это поле
+        public bool IsSmoking;
     }
 
     public class VehicleModulesPlugin : RocketPlugin<VehicleModulesConfig>
@@ -29,8 +29,18 @@ namespace VehicleModulesSystem
         protected override void Load()
         {
             Instance = this;
-            StartCoroutine(VehicleHealthObserver());
-            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: Наблюдатель запущен. Использование актуальных API (TriggerEffectParameters).");
+            
+            // Запускаем наблюдатель с задержкой в 2 секунды, чтобы избежать NullReferenceException при загрузке конфига
+            StartCoroutine(StartObserverWithDelay());
+            
+            Rocket.Core.Logging.Logger.Log("!!! VEHICLE MODULES DEBUG VERSION LOADED !!!");
+        }
+
+        private IEnumerator StartObserverWithDelay()
+        {
+            yield return new WaitForSeconds(2.0f);
+            StartCoroutine(VehicleAdvancedObserver());
+            Rocket.Core.Logging.Logger.Log("[Debug] Наблюдатель успешно запущен через 2 секунды после старта.");
         }
 
         protected override void Unload()
@@ -39,75 +49,92 @@ namespace VehicleModulesSystem
             TrackedVehicles.Clear();
         }
 
-        private IEnumerator VehicleHealthObserver()
+        private IEnumerator VehicleAdvancedObserver()
         {
             while (true)
             {
-                for (int i = VehicleManager.vehicles.Count - 1; i >= 0; i--)
+                // Проверяем существование конфига, чтобы избежать NullRef
+                if (Configuration == null || Configuration.Instance == null || Configuration.Instance.TargetedVehicleIds == null)
                 {
-                    var vehicle = VehicleManager.vehicles[i];
+                    yield return new WaitForSeconds(1.0f);
+                    continue;
+                }
+
+                // Работаем с копией списка, чтобы не вызвать ошибку при спавне/удалении машин
+                var currentVehicles = VehicleManager.vehicles.ToList();
+
+                foreach (var vehicle in currentVehicles)
+                {
                     if (vehicle == null || vehicle.asset == null || vehicle.isExploded) continue;
 
+                    // Фильтр по ID
                     if (!Configuration.Instance.TargetedVehicleIds.Contains(vehicle.asset.id)) continue;
 
+                    // ВЕШАЕМ ДАТЧИК (Регистрация)
                     if (!TrackedVehicles.TryGetValue(vehicle.instanceID, out VehicleState state))
                     {
                         state = new VehicleState { LastHealth = vehicle.health };
                         TrackedVehicles.Add(vehicle.instanceID, state);
+                        Rocket.Core.Logging.Logger.Log($"[Debug] Датчик установлен на: {vehicle.asset.vehicleName} ID:{vehicle.instanceID}");
                         continue;
                     }
 
-                    // Обработка урона
-                    if (vehicle.health < state.LastHealth)
+                    // --- DEBUG LOGIC: ШАНС ПОЛОМКИ КАЖДЫЕ 5 СЕКУНД ---
+                    // 30% шанс, что сработает поломка модуля принудительно
+                    if (UnityEngine.Random.value < 0.30f)
                     {
-                        int damageTaken = state.LastHealth - vehicle.health;
-                        ExecuteDamageLogic(vehicle, state, damageTaken);
+                        Rocket.Core.Logging.Logger.Log($"[Debug] Тестовая попытка поломки модуля для {vehicle.instanceID}");
+                        ExecuteDamageLogic(vehicle, state, 15);
                     }
 
-                    // ОБХОД READ-ONLY SPEED: Если трансмиссия сломана, принудительно гасим инерцию
-                    if (state.IsTransmissionBroken)
+                    // Обычное отслеживание урона
+                    if (vehicle.health < state.LastHealth)
                     {
-                        ForceStopVehicle(vehicle);
+                        ExecuteDamageLogic(vehicle, state, state.LastHealth - vehicle.health);
                     }
+
+                    // Принудительный стоп при сломанной коробке
+                    if (state.IsTransmissionBroken) StopPhysical(vehicle);
 
                     state.LastHealth = vehicle.health;
                 }
-                yield return new WaitForSeconds(0.1f);
-            }
-        }
 
-        private void ForceStopVehicle(InteractableVehicle v)
-        {
-            // Поскольку .speed теперь read-only, мы работаем напрямую с Rigidbody
-            // Это профессиональный способ остановить технику в Unturned
-            if (v.GetComponent<Rigidbody>() is Rigidbody rb)
-            {
-                rb.velocity = Vector3.zero;
-                rb.angularVelocity = Vector3.zero;
+                // Сканирование и дебаг-урон каждые 5 секунд по ТЗ
+                yield return new WaitForSeconds(5.0f);
             }
         }
 
         private void ExecuteDamageLogic(InteractableVehicle v, VehicleState s, int damage)
         {
-            var cfg = Configuration.Instance;
-            float damageFactor = damage / 100f;
+            // В Debug версии шансы ОЧЕНЬ высокие (0.5 бонус), чтобы сразу увидеть результат
+            float chanceBonus = 0.5f;
 
-            if (!s.IsFuelTankBroken && UnityEngine.Random.value < (cfg.ChanceFuelLeak + damageFactor))
+            if (!s.IsFuelTankBroken && UnityEngine.Random.value < (0.1f + chanceBonus))
             {
                 s.IsFuelTankBroken = true;
-                NotifyVehicle(v, "ВНИМАНИЕ: Пробит топливный бак!", Color.red);
+                Notify(v, "DEBUG: БАК ПРОБИТ!", Color.red);
                 StartCoroutine(FuelLeakRoutine(v, s));
             }
 
-            if (!s.IsTransmissionBroken && UnityEngine.Random.value < (cfg.ChanceTransmission + damageFactor))
+            if (!s.IsTransmissionBroken && UnityEngine.Random.value < (0.1f + chanceBonus))
             {
                 s.IsTransmissionBroken = true;
-                NotifyVehicle(v, "КРИТ: Трансмиссия уничтожена!", Color.red);
+                Notify(v, "DEBUG: ТРАНСМИССИЯ ВЫБИТА!", Color.red);
             }
 
-            if (!s.IsOnFire && UnityEngine.Random.value < (cfg.ChanceFire + damageFactor))
+            if (!s.IsOnFire && UnityEngine.Random.value < (0.05f + chanceBonus))
             {
                 StartCoroutine(FireRoutine(v, s));
+            }
+        }
+
+        private void StopPhysical(InteractableVehicle v)
+        {
+            var rb = v.GetComponent<Rigidbody>();
+            if (rb != null)
+            {
+                rb.velocity = Vector3.zero;
+                rb.angularVelocity = Vector3.zero;
             }
         }
 
@@ -115,7 +142,7 @@ namespace VehicleModulesSystem
         {
             while (s.IsFuelTankBroken && v != null && !v.isExploded && v.fuel > 0)
             {
-                v.fuel = (ushort)Mathf.Max(0, v.fuel - 5);
+                v.fuel = (ushort)Mathf.Max(0, v.fuel - 10);
                 yield return new WaitForSeconds(1f);
             }
         }
@@ -123,37 +150,33 @@ namespace VehicleModulesSystem
         private IEnumerator FireRoutine(InteractableVehicle v, VehicleState s)
         {
             s.IsOnFire = true;
-            s.IsSmoking = true; // Устанавливаем статус для CommandVfix
-            
+            s.IsSmoking = true;
+            Notify(v, "DEBUG: ПОЖАР В МТО!", Color.red);
+
             while (s.IsOnFire && v != null && !v.isExploded)
             {
-                TriggerModernEffect(125, v.transform.position);
-                VehicleManager.damage(v, 150, 1, false);
+                TriggerEffect(125, v.transform.position);
+                VehicleManager.damage(v, 100, 1, false);
                 yield return new WaitForSeconds(1.5f);
-                
-                // Если машина починена через команду во время пожара
-                if (!s.IsOnFire) break; 
             }
             s.IsOnFire = false;
         }
 
-        // РЕШЕНИЕ CS0618: Используем TriggerEffectParameters вместо устаревшего sendEffect
-        private void TriggerModernEffect(ushort id, Vector3 pos)
+        private void TriggerEffect(ushort id, Vector3 pos)
         {
-            EffectAsset asset = Assets.find(EAssetType.EFFECT, id) as EffectAsset;
-            if (asset != null)
+            if (Assets.find(EAssetType.EFFECT, id) is EffectAsset asset)
             {
-                TriggerEffectParameters parameters = new TriggerEffectParameters(asset);
-                parameters.position = pos;
-                parameters.relevantDistance = 128f;
-                EffectManager.triggerEffect(parameters);
+                TriggerEffectParameters p = new TriggerEffectParameters(asset);
+                p.position = pos;
+                p.relevantDistance = 128f;
+                EffectManager.triggerEffect(p);
             }
         }
 
-        private void NotifyVehicle(InteractableVehicle v, string text, Color color)
+        private void Notify(InteractableVehicle v, string msg, Color c)
         {
             if (v.passengers.Length > 0 && v.passengers[0].player != null)
-                UnturnedChat.Say(v.passengers[0].player.playerID.steamID, text, color);
+                UnturnedChat.Say(v.passengers[0].player.playerID.steamID, msg, c);
         }
     }
 }
