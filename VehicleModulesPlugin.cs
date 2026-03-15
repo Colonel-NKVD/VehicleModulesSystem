@@ -11,10 +11,13 @@ using Steamworks;
 
 namespace VehicleModulesSystem
 {
+    // Расширенный класс состояния для работы со всеми модулями
     public class VehicleState
     {
         public ushort LastHealth;
         public bool IsFuelTankBroken;
+        public bool IsTransmissionBroken; // ВОЗВРАЩЕНО
+        public bool IsGunBroken;          // ВОЗВРАЩЕНО
         public bool IsOnFire;
         public bool IsSmoking;
     }
@@ -22,17 +25,16 @@ namespace VehicleModulesSystem
     public class VehicleModulesPlugin : RocketPlugin<VehicleModulesConfig>
     {
         public static VehicleModulesPlugin Instance;
-        // Словарь для хранения состояния: Ключ — уникальный InstanceID машины
         public Dictionary<uint, VehicleState> TrackedVehicles = new Dictionary<uint, VehicleState>();
 
         protected override void Load()
         {
             Instance = this;
             
-            // Запускаем "Наблюдателя", который будет следить за уроном без всяких событий
+            // Запуск цикла мониторинга (Polling)
             StartCoroutine(VehicleObserverLoop());
             
-            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: [OBSERVER MODE] Система запущена. Игнорируем API событий.");
+            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: Full Module Support (Observer Mode) Engaged.");
         }
 
         protected override void Unload()
@@ -41,18 +43,14 @@ namespace VehicleModulesSystem
             TrackedVehicles.Clear();
         }
 
-        // ТОТ САМЫЙ "ГРЯЗНЫЙ" ЦИКЛ
         private IEnumerator VehicleObserverLoop()
         {
             while (true)
             {
-                // Проверяем все машины на сервере каждые 0.1 секунды
-                // Это неоптимизированно, но зато сработает на любой версии игры
+                // ToList() предотвращает ошибку изменения коллекции во время перечисления
                 foreach (var vehicle in VehicleManager.vehicles.ToList())
                 {
                     if (vehicle == null || vehicle.asset == null) continue;
-                    
-                    // Фильтруем технику по вашему списку ID из конфига
                     if (!Configuration.Instance.TargetedVehicleIds.Contains(vehicle.asset.id)) continue;
 
                     if (!TrackedVehicles.TryGetValue(vehicle.instanceID, out VehicleState state))
@@ -62,62 +60,73 @@ namespace VehicleModulesSystem
                         continue;
                     }
 
-                    // Если текущее здоровье меньше, чем было 0.1 сек назад — значит получен урон!
+                    // Если здоровье упало — рассчитываем шансы повреждения модулей
                     if (vehicle.health < state.LastHealth)
                     {
-                        OnVehicleDamageDetected(vehicle, state);
+                        ProcessModuleDamage(vehicle, state);
                     }
 
                     state.LastHealth = vehicle.health;
                 }
-
                 yield return new WaitForSeconds(0.1f);
             }
         }
 
-        private void OnVehicleDamageDetected(InteractableVehicle v, VehicleState s)
+        private void ProcessModuleDamage(InteractableVehicle v, VehicleState s)
         {
             var config = Configuration.Instance;
-
-            // Шанс пробития бака
+            
+            // Расчет шансов для всех систем
             if (UnityEngine.Random.value < config.ChanceFuelLeak && !s.IsFuelTankBroken)
             {
                 s.IsFuelTankBroken = true;
-                NotifyDriver(v, "КРИТИЧЕСКИЙ УРОН: Бак пробит!", Color.red);
+                NotifyDriver(v, "КРИТ: Топливный бак пробит!", Color.red);
                 StartCoroutine(FuelLeakRoutine(v, s));
             }
 
-            // Шанс возгорания
+            if (UnityEngine.Random.value < config.ChanceTransmission && !s.IsTransmissionBroken)
+            {
+                s.IsTransmissionBroken = true;
+                NotifyDriver(v, "КРИТ: Трансмиссия повреждена!", Color.red);
+            }
+
+            if (UnityEngine.Random.value < config.ChanceGunBroken && !s.IsGunBroken)
+            {
+                s.IsGunBroken = true;
+                NotifyDriver(v, "КРИТ: Орудие заклинило!", Color.red);
+            }
+
             if (UnityEngine.Random.value < config.ChanceFire && !s.IsOnFire)
             {
                 StartCoroutine(FireRoutine(v, s));
             }
         }
 
+        // --- Логика работы модулей ---
+
         private IEnumerator FuelLeakRoutine(InteractableVehicle v, VehicleState s)
         {
             while (s.IsFuelTankBroken && v != null && !v.isExploded && v.fuel > 0)
             {
                 v.fuel = (ushort)Mathf.Max(0, v.fuel - 2);
-                yield return new WaitForSeconds(1f);
+                yield return new WaitForSeconds(1.0f);
             }
         }
 
         private IEnumerator FireRoutine(InteractableVehicle v, VehicleState s)
         {
             s.IsOnFire = true;
-            SpawnEffect(125, v.transform.position);
+            TriggerInternalEffect(125, v.transform.position);
             for (int i = 0; i < 5; i++)
             {
                 if (v == null || v.isExploded) break;
-                // Наносим урон через API, наш Обсерватор его увидит, но LastHealth не даст зациклиться
                 VehicleManager.damage(v, 150, 1, false);
                 yield return new WaitForSeconds(1.5f);
             }
             s.IsOnFire = false;
         }
 
-        private void SpawnEffect(ushort id, Vector3 pos)
+        private void TriggerInternalEffect(ushort id, Vector3 pos)
         {
             if (Assets.find(EAssetType.EFFECT, id) is EffectAsset asset)
             {
