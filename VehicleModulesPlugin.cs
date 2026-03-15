@@ -7,6 +7,7 @@ using Rocket.Core.Plugins;
 using Rocket.Unturned.Chat;
 using SDG.Unturned;
 using UnityEngine;
+using Steamworks;
 
 namespace VehicleModulesSystem
 {
@@ -27,20 +28,29 @@ namespace VehicleModulesSystem
         protected override void Load()
         {
             Instance = this;
-            VehicleManager.onDamageVehicleRequested += OnVehicleDamaged;
+            
+            // Подписываемся на событие. 
+            // Компилятор сам подхватит нужный делегат из вашей версии Assembly-CSharp
+            VehicleManager.onDamageVehicleRequested += OnVehicleDamagedLegacy;
+            
+            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: Модуль мониторинга бронетехники активирован (Legacy API Mode).");
         }
 
         protected override void Unload()
         {
-            VehicleManager.onDamageVehicleRequested -= OnVehicleDamaged;
+            VehicleManager.onDamageVehicleRequested -= OnVehicleDamagedLegacy;
             StopAllCoroutines();
             TrackedVehicles.Clear();
         }
 
-        private void OnVehicleDamaged(ref DamageVehicleParameters parameters, ref bool shouldAllow)
+        // ОБХОДНОЙ ПУТЬ: Используем старую сигнатуру метода, которая существовала до появления DamageVehicleParameters.
+        // Это решит ошибку CS0246 в вашей среде сборки.
+        private void OnVehicleDamagedLegacy(CSteamID instigatorSteamID, InteractableVehicle vehicle, ref ushort pendingTotalDamage, ref bool canDamage, ref EPlayerKill kill, ref uint xp)
         {
-            InteractableVehicle vehicle = parameters.vehicle;
-            if (vehicle == null || !Configuration.Instance.TargetedVehicleIds.Contains(vehicle.asset.id)) return;
+            if (vehicle == null || vehicle.asset == null) return;
+            
+            // Проверка, входит ли ID техники в список разрешенных в конфиге
+            if (!Configuration.Instance.TargetedVehicleIds.Contains(vehicle.asset.id)) return;
 
             if (!TrackedVehicles.TryGetValue(vehicle.instanceID, out VehicleState state))
             {
@@ -48,64 +58,69 @@ namespace VehicleModulesSystem
                 TrackedVehicles.Add(vehicle.instanceID, state);
             }
 
-            ProcessModuleDamage(vehicle, state);
+            ProcessModuleDamage(vehicle, state, instigatorSteamID);
 
-            // Клин орудия: шанс внутреннего взрыва при получении урона
+            // Орудие: 50% шанс внутреннего взрыва при получении урона, если оно сломано
             if (state.IsGunBroken && UnityEngine.Random.value < 0.50f)
             {
                 ExplodeInternally(vehicle);
             }
         }
 
-        private void ProcessModuleDamage(InteractableVehicle v, VehicleState s)
+        private void ProcessModuleDamage(InteractableVehicle v, VehicleState s, CSteamID instigatorSteamID)
         {
-            float roll = UnityEngine.Random.value;
-            var driverID = v.passengers[0].player?.playerID.steamID;
+            var config = Configuration.Instance;
+            
+            // В старом API мы не всегда можем точно получить водителя через пассажиров в момент урона, 
+            // поэтому используем безопасную проверку
+            CSteamID? driverID = null;
+            if (v.passengers != null && v.passengers.Length > 0 && v.passengers[0].player != null)
+            {
+                driverID = v.passengers[0].player.playerID.steamID;
+            }
 
-            // Расчет шансов для каждого модуля отдельно
-            if (UnityEngine.Random.value < Configuration.Instance.ChanceFuelLeak && !s.IsFuelTankBroken)
+            // Шанс: Пробитие бака
+            if (UnityEngine.Random.value < config.ChanceFuelLeak && !s.IsFuelTankBroken)
             {
                 s.IsFuelTankBroken = true;
-                UnturnedChat.Say(driverID, "КРИТИЧЕСКИЙ УРОН: Бак пробит!", Color.red);
+                if (driverID.HasValue) UnturnedChat.Say(driverID.Value, "КРИТИЧЕСКИЙ УРОН: Бак пробит!", Color.red);
                 StartCoroutine(FuelLeakRoutine(v, s));
             }
             
-            if (UnityEngine.Random.value < Configuration.Instance.ChanceTransmission && !s.IsTransmissionBroken)
+            // Шанс: Поломка трансмиссии
+            if (UnityEngine.Random.value < config.ChanceTransmission && !s.IsTransmissionBroken)
             {
                 s.IsTransmissionBroken = true;
-                UnturnedChat.Say(driverID, "КРИТИЧЕСКИЙ УРОН: Трансмиссия повреждена!", Color.red);
+                if (driverID.HasValue) UnturnedChat.Say(driverID.Value, "КРИТИЧЕСКИЙ УРОН: Трансмиссия повреждена!", Color.red);
                 StartCoroutine(TransmissionRoutine(v));
             }
 
-            if (UnityEngine.Random.value < Configuration.Instance.ChanceGunBroken && !s.IsGunBroken)
+            // Шанс: Клин орудия
+            if (UnityEngine.Random.value < config.ChanceGunBroken && !s.IsGunBroken)
             {
                 s.IsGunBroken = true;
-                UnturnedChat.Say(driverID, "КРИТИЧЕСКИЙ УРОН: Орудие заклинило!", Color.red);
+                if (driverID.HasValue) UnturnedChat.Say(driverID.Value, "КРИТИЧЕСКИЙ УРОН: Орудие заклинило!", Color.red);
             }
 
-            if (UnityEngine.Random.value < Configuration.Instance.ChanceFire)
-            {
-                StartCoroutine(FireRoutine(v, s));
-            }
-
-            if (UnityEngine.Random.value < Configuration.Instance.ChanceSmoke)
-            {
-                StartCoroutine(SmokeRoutine(v, s));
-            }
-
-            if (UnityEngine.Random.value < Configuration.Instance.ChanceStun)
-            {
-                StartCoroutine(StunRoutine(v));
-            }
+            // Шанс: Пожар, Дым и Оглушение
+            if (UnityEngine.Random.value < config.ChanceFire) StartCoroutine(FireRoutine(v, s));
+            if (UnityEngine.Random.value < config.ChanceSmoke) StartCoroutine(SmokeRoutine(v, s));
+            if (UnityEngine.Random.value < config.ChanceStun) StartCoroutine(StunRoutine(v));
         }
 
         private IEnumerator StunRoutine(InteractableVehicle v)
         {
-            var passengers = v.passengers.Where(p => p.player != null).Select(p => p.player.player).ToList();
+            if (v.passengers == null) yield break;
+
+            var passengers = v.passengers
+                .Where(p => p.player != null)
+                .Select(p => p.player.player)
+                .ToList();
 
             foreach (var p in passengers)
             {
-                // Modal флаг открывает "пустое" окно, блокирует управление и вызывает курсор
+                if (p == null) continue;
+                // Modal флаг: блокирует управление, вызывает курсор, делает "пустой" экран
                 p.setPluginWidgetFlag(EPluginWidgetFlags.Modal, true);
                 UnturnedChat.Say(p.channel.owner.playerID.steamID, "ВЫ КОНТУЖЕНЫ!", Color.yellow);
             }
@@ -122,7 +137,7 @@ namespace VehicleModulesSystem
         {
             if (s.IsOnFire) yield break;
             s.IsOnFire = true;
-            EffectManager.sendEffect(125, 64, v.transform.position);
+            EffectManager.sendEffect(125, 64, v.transform.position); 
 
             for (int i = 0; i < 8; i++)
             {
@@ -137,14 +152,17 @@ namespace VehicleModulesSystem
         {
             if (s.IsSmoking) yield break;
             s.IsSmoking = true;
-            EffectManager.sendEffect(123, 64, v.transform.position);
+            EffectManager.sendEffect(123, 64, v.transform.position); 
 
             float duration = UnityEngine.Random.Range(15, 30);
             float start = Time.time;
             while (Time.time - start < duration && v != null && !v.isExploded && s.IsSmoking)
             {
-                foreach (var seat in v.passengers.Where(p => p.player != null))
-                    seat.player.player.life.askSuffocate(10);
+                if (v.passengers != null)
+                {
+                    foreach (var seat in v.passengers.Where(p => p.player != null))
+                        seat.player.player.life.askSuffocate(10);
+                }
                 yield return new WaitForSeconds(2f);
             }
             s.IsSmoking = false;
