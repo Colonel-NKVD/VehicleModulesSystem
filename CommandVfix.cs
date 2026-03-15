@@ -1,9 +1,9 @@
 using Rocket.API;
-using Rocket.Unturned.Player;
 using Rocket.Unturned.Chat;
+using Rocket.Unturned.Player;
+using SDG.Unturned;
 using System.Collections.Generic;
 using UnityEngine;
-using SDG.Unturned;
 
 namespace VehicleModulesSystem
 {
@@ -11,77 +11,36 @@ namespace VehicleModulesSystem
     {
         public AllowedCaller AllowedCaller => AllowedCaller.Player;
         public string Name => "vfix";
-        public string Help => "Полный ремонт модулей";
+        public string Help => "Полный ремонт модулей и техники";
         public string Syntax => "";
         public List<string> Aliases => new List<string>();
-        public List<string> Permissions => new List<string> { "vehicle.repair" };
+        public List<string> Permissions => new List<string> { "vehiclemodules.vfix" };
 
         public void Execute(IRocketPlayer caller, string[] command)
         {
             UnturnedPlayer player = (UnturnedPlayer)caller;
-            InteractableVehicle v = player.CurrentVehicle;
+            InteractableVehicle vehicle = player.CurrentVehicle;
 
-            if (v == null || !VehicleModulesPlugin.Instance.Configuration.Instance.TargetedVehicleIds.Contains(v.asset.id))
+            if (vehicle == null)
             {
-                UnturnedChat.Say(player, "Вы должны быть внутри целевой техники!", Color.red);
+                UnturnedChat.Say(player, "Вы должны находиться внутри техники!", Color.yellow);
                 return;
             }
 
-            bool isAtStation = false;
-            float radius = VehicleModulesPlugin.Instance.Configuration.Instance.RepairStationRadius;
-            ushort stationId = VehicleModulesPlugin.Instance.Configuration.Instance.RepairStationBarricadeId;
+            // 1. Полный ремонт через стандартный метод
+            VehicleManager.repair(vehicle, 10000, 1);
+            vehicle.askFillFuel(2000);
 
-            // ПРОФЕССИОНАЛЬНОЕ РЕШЕНИЕ: Использование RegionCoordinate
-            List<RegionCoordinate> regions = new List<RegionCoordinate>();
-            Regions.getRegionsInRadius(player.Position, radius, regions);
-            
-            foreach (var region in regions)
+            // 2. Сброс состояния в датчике плагина
+            if (VehicleModulesPlugin.Instance.TrackedVehicles.TryGetValue(vehicle.instanceID, out VehicleState state))
             {
-                // ushort.MaxValue (65535) означает, что мы ищем на земле, а не на технике
-                if (BarricadeManager.tryGetRegion(region.x, region.y, ushort.MaxValue, out BarricadeRegion br))
-                {
-                    foreach (var drop in br.drops)
-                    {
-                        if (drop.asset.id == stationId && Vector3.Distance(drop.model.position, player.Position) <= radius)
-                        {
-                            isAtStation = true;
-                            break;
-                        }
-                    }
-                }
-                if (isAtStation) break;
-            }
-
-            if (!isAtStation)
-            {
-                UnturnedChat.Say(player, "Ремонтная станция не обнаружена!", Color.red);
-                return;
-            }
-
-            UnturnedChat.Say(player, "Начат капитальный ремонт (30 сек.)...", Color.yellow);
-            VehicleModulesPlugin.Instance.StartCoroutine(RepairTimer(player, v));
-        }
-
-        private IEnumerator<WaitForSeconds> RepairTimer(UnturnedPlayer p, InteractableVehicle v)
-        {
-            yield return new WaitForSeconds(30f);
-
-            if (v != null && !v.isExploded && p.CurrentVehicle == v)
-            {
-                if (VehicleModulesPlugin.Instance.TrackedVehicles.TryGetValue(v.instanceID, out var state))
-                {
-                    state.IsFuelTankBroken = false;
-                    state.IsGunBroken = false;
-                    state.IsTransmissionBroken = false;
-                    state.IsOnFire = false;
-                    state.IsSmoking = false;
-                    
-                    v.askRepair(65000);
-                    v.askFillFuel(65000);
-                    v.batteryCharge = 10000;
-                    
-                    UnturnedChat.Say(p, "ТЕХНИКА ПОЛНОСТЬЮ ВОССТАНОВЛЕНА", Color.green);
-                }
+                state.IsFuelTankBroken = false;
+                state.IsTransmissionBroken = false;
+                state.IsOnFire = false;
+                state.IsSmoking = false;
+                state.LastHealth = vehicle.health; // Критически важно обновить LastHealth!
+                
+                UnturnedChat.Say(player, "Техника и модули полностью восстановлены!", Color.green);
             }
         }
     }
