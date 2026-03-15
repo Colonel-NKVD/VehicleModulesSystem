@@ -8,12 +8,12 @@ using Rocket.Unturned.Chat;
 using SDG.Unturned;
 using UnityEngine;
 using Steamworks;
-using HarmonyLib; // ТРЕБУЕТСЯ 0Harmony.dll
 
 namespace VehicleModulesSystem
 {
     public class VehicleState
     {
+        public ushort LastHealth;
         public bool IsFuelTankBroken;
         public bool IsOnFire;
         public bool IsSmoking;
@@ -22,43 +22,84 @@ namespace VehicleModulesSystem
     public class VehicleModulesPlugin : RocketPlugin<VehicleModulesConfig>
     {
         public static VehicleModulesPlugin Instance;
+        // Словарь для хранения состояния: Ключ — уникальный InstanceID машины
         public Dictionary<uint, VehicleState> TrackedVehicles = new Dictionary<uint, VehicleState>();
-        private Harmony _harmony;
 
         protected override void Load()
         {
             Instance = this;
-
-            // ГРЯЗНЫЙ ХАК: Вместо подписки на событие с битой структурой, мы патчим метод напрямую
-            _harmony = new Harmony("com.vehiclemodules.patch");
-            _harmony.PatchAll();
-
-            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: [HARMONY BYPASS] Система внедрена в движок. Игнорируем DamageVehicleParameters.");
+            
+            // Запускаем "Наблюдателя", который будет следить за уроном без всяких событий
+            StartCoroutine(VehicleObserverLoop());
+            
+            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: [OBSERVER MODE] Система запущена. Игнорируем API событий.");
         }
 
         protected override void Unload()
         {
-            _harmony.UnpatchAll("com.vehiclemodules.patch");
             StopAllCoroutines();
             TrackedVehicles.Clear();
         }
 
-        // Этот метод будет вызываться каждый раз, когда КТО-ТО или ЧТО-ТО наносит урон машине
-        public void InternalOnVehicleDamage(InteractableVehicle vehicle, ushort damage)
+        // ТОТ САМЫЙ "ГРЯЗНЫЙ" ЦИКЛ
+        private IEnumerator VehicleObserverLoop()
         {
-            if (vehicle == null || vehicle.asset == null) return;
-            if (!Configuration.Instance.TargetedVehicleIds.Contains(vehicle.asset.id)) return;
-
-            if (!TrackedVehicles.TryGetValue(vehicle.instanceID, out VehicleState state))
+            while (true)
             {
-                state = new VehicleState();
-                TrackedVehicles.Add(vehicle.instanceID, state);
+                // Проверяем все машины на сервере каждые 0.1 секунды
+                // Это неоптимизированно, но зато сработает на любой версии игры
+                foreach (var vehicle in VehicleManager.vehicles.ToList())
+                {
+                    if (vehicle == null || vehicle.asset == null) continue;
+                    
+                    // Фильтруем технику по вашему списку ID из конфига
+                    if (!Configuration.Instance.TargetedVehicleIds.Contains(vehicle.asset.id)) continue;
+
+                    if (!TrackedVehicles.TryGetValue(vehicle.instanceID, out VehicleState state))
+                    {
+                        state = new VehicleState { LastHealth = vehicle.health };
+                        TrackedVehicles.Add(vehicle.instanceID, state);
+                        continue;
+                    }
+
+                    // Если текущее здоровье меньше, чем было 0.1 сек назад — значит получен урон!
+                    if (vehicle.health < state.LastHealth)
+                    {
+                        OnVehicleDamageDetected(vehicle, state);
+                    }
+
+                    state.LastHealth = vehicle.health;
+                }
+
+                yield return new WaitForSeconds(0.1f);
+            }
+        }
+
+        private void OnVehicleDamageDetected(InteractableVehicle v, VehicleState s)
+        {
+            var config = Configuration.Instance;
+
+            // Шанс пробития бака
+            if (UnityEngine.Random.value < config.ChanceFuelLeak && !s.IsFuelTankBroken)
+            {
+                s.IsFuelTankBroken = true;
+                NotifyDriver(v, "КРИТИЧЕСКИЙ УРОН: Бак пробит!", Color.red);
+                StartCoroutine(FuelLeakRoutine(v, s));
             }
 
-            // Шанс возгорания при любом уроне
-            if (UnityEngine.Random.value < Configuration.Instance.ChanceFire && !state.IsOnFire)
+            // Шанс возгорания
+            if (UnityEngine.Random.value < config.ChanceFire && !s.IsOnFire)
             {
-                StartCoroutine(FireRoutine(vehicle, state));
+                StartCoroutine(FireRoutine(v, s));
+            }
+        }
+
+        private IEnumerator FuelLeakRoutine(InteractableVehicle v, VehicleState s)
+        {
+            while (s.IsFuelTankBroken && v != null && !v.isExploded && v.fuel > 0)
+            {
+                v.fuel = (ushort)Mathf.Max(0, v.fuel - 2);
+                yield return new WaitForSeconds(1f);
             }
         }
 
@@ -69,9 +110,11 @@ namespace VehicleModulesSystem
             for (int i = 0; i < 5; i++)
             {
                 if (v == null || v.isExploded) break;
+                // Наносим урон через API, наш Обсерватор его увидит, но LastHealth не даст зациклиться
                 VehicleManager.damage(v, 150, 1, false);
-                yield return new WaitForSeconds(1.2f);
+                yield return new WaitForSeconds(1.5f);
             }
+            s.IsOnFire = false;
         }
 
         private void SpawnEffect(ushort id, Vector3 pos)
@@ -84,20 +127,11 @@ namespace VehicleModulesSystem
                 EffectManager.triggerEffect(e);
             }
         }
-    }
 
-    // ПАТЧ: Врезаемся в основной метод урона техники Unturned
-    [HarmonyPatch(typeof(VehicleManager), "damage")]
-    public static class VehicleDamagePatch
-    {
-        [HarmonyPrefix]
-        public static void Prefix(InteractableVehicle vehicle, ushort damage, float times, bool canBeRepairing)
+        private void NotifyDriver(InteractableVehicle v, string msg, Color c)
         {
-            // Вызываем логику нашего плагина, обходя все структуры DamageVehicleParameters
-            if (VehicleModulesPlugin.Instance != null && !canBeRepairing)
-            {
-                VehicleModulesPlugin.Instance.InternalOnVehicleDamage(vehicle, (ushort)(damage * times));
-            }
+            if (v.passengers.Length > 0 && v.passengers[0].player != null)
+                UnturnedChat.Say(v.passengers[0].player.playerID.steamID, msg, c);
         }
     }
 }
