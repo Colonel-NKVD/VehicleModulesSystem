@@ -4,143 +4,101 @@ using System.Collections;
 using System.Linq;
 using Rocket.API;
 using Rocket.Core.Plugins;
-using Rocket.Unturned.Chat;
 using SDG.Unturned;
 using UnityEngine;
-using Steamworks;
 
 namespace VehicleModulesSystem
 {
+    // Класс для хранения состояния каждой конкретной машины
     public class VehicleState
     {
-        public ushort LastKnownHealth; // Основной показатель для детекции урона
-        public bool IsFuelTankBroken;
-        public bool IsTransmissionBroken;
-        public bool IsGunBroken;
-        public bool IsOnFire;
-        public bool IsSmoking;
+        public ushort LastHealth;
+        public uint InstanceID;
     }
 
     public class VehicleModulesPlugin : RocketPlugin<VehicleModulesConfig>
     {
         public static VehicleModulesPlugin Instance;
+        // Хранилище датчиков: InstanceID -> Данные о машине
         public Dictionary<uint, VehicleState> TrackedVehicles = new Dictionary<uint, VehicleState>();
 
         protected override void Load()
         {
             Instance = this;
-            Rocket.Core.Logging.Logger.Log("--- VehicleModules: Запуск системы мониторинга урона ---");
-            StartCoroutine(SafeStart());
+            Rocket.Core.Logging.Logger.Log("--- [OBSERVER] Система мониторинга запущена ---");
+            
+            // Запускаем корутину-наблюдатель
+            StartCoroutine(VehicleHealthWatcher());
         }
 
-        private IEnumerator SafeStart()
+        protected override void Unload()
         {
+            StopAllCoroutines();
+            TrackedVehicles.Clear();
+            Rocket.Core.Logging.Logger.Log("--- [OBSERVER] Система остановлена ---");
+        }
+
+        private IEnumerator VehicleHealthWatcher()
+        {
+            // Ждем инициализации мира
             yield return new WaitForSeconds(3.0f);
-            StartCoroutine(DamageWatcherLoop());
-            Rocket.Core.Logging.Logger.Log("--- VehicleModules: Наблюдатель активен (Интервал: 5 сек) ---");
-        }
 
-        private IEnumerator DamageWatcherLoop()
-        {
             while (true)
             {
-                if (VehicleManager.vehicles == null) { yield return new WaitForSeconds(1f); continue; }
+                if (VehicleManager.vehicles == null)
+                {
+                    yield return new WaitForSeconds(1.0f);
+                    continue;
+                }
 
-                // Работаем через цикл for для стабильности
+                // Перебираем всю технику на сервере
                 for (int i = VehicleManager.vehicles.Count - 1; i >= 0; i--)
                 {
                     var vehicle = VehicleManager.vehicles[i];
-                    if (vehicle == null || vehicle.asset == null || vehicle.isExploded) continue;
-
-                    // Проверка ID из конфига
-                    if (!Configuration.Instance.TargetedVehicleIds.Contains(vehicle.asset.id)) continue;
-
-                    // РЕГИСТРАЦИЯ ДАТЧИКА
-                    if (!TrackedVehicles.TryGetValue(vehicle.instanceID, out VehicleState state))
+                    
+                    // Пропускаем пустые объекты или уже взорванные машины
+                    if (vehicle == null || vehicle.asset == null || vehicle.isExploded) 
                     {
-                        state = new VehicleState { LastKnownHealth = vehicle.health };
-                        TrackedVehicles.Add(vehicle.instanceID, state);
-                        Rocket.Core.Logging.Logger.Log($"[SCAN] Установлен датчик ХП на {vehicle.asset.vehicleName} ({vehicle.instanceID}). ХП: {vehicle.health}");
+                        // Если машина была в списке, но теперь взорвана/удалена — убираем датчик
+                        if (vehicle != null && TrackedVehicles.ContainsKey(vehicle.instanceID))
+                            TrackedVehicles.Remove(vehicle.instanceID);
                         continue;
                     }
 
-                    // ПРОВЕРКА УРОНА (Главное исправление)
-                    if (vehicle.health < state.LastKnownHealth)
+                    // 1. УСТАНОВКА ДАТЧИКА (если машина новая для плагина)
+                    if (!TrackedVehicles.TryGetValue(vehicle.instanceID, out VehicleState state))
                     {
-                        int damageAmount = state.LastKnownHealth - vehicle.health;
-                        Rocket.Core.Logging.Logger.Log($"[DAMAGE DETECTED] Техника {vehicle.instanceID} получила урон! (Было: {state.LastKnownHealth}, Стало: {vehicle.health}, Урон: {damageAmount})");
+                        state = new VehicleState 
+                        { 
+                            InstanceID = vehicle.instanceID,
+                            LastHealth = vehicle.health 
+                        };
+                        TrackedVehicles.Add(vehicle.instanceID, state);
                         
-                        // Обработка логики повреждений
-                        ProcessModuleDamage(vehicle, state, damageAmount);
+                        Rocket.Core.Logging.Logger.Log($"[NEW] Датчик установлен: {vehicle.asset.vehicleName} (ID: {vehicle.instanceID}) | Текущее ХП: {vehicle.health}");
+                        continue;
                     }
-                    else if (vehicle.health > state.LastKnownHealth)
+
+                    // 2. ОТСЛЕЖИВАНИЕ УРОНА (сравнение текущего ХП с сохраненным)
+                    if (vehicle.health < state.LastHealth)
                     {
-                        // Если технику починили, просто обновляем данные без логов
-                        state.LastKnownHealth = vehicle.health;
+                        int damageTaken = state.LastHealth - vehicle.health;
+                        
+                        // Логируем ВЕСЬ полученный урон, как ты и просил
+                        Rocket.Core.Logging.Logger.Log($"[DAMAGE] Машина {vehicle.asset.vehicleName} ({vehicle.instanceID}) получила {damageTaken} урона! (Осталось ХП: {vehicle.health})");
+                        
+                        // Здесь в будущем будет вызов логики модулей:
+                        // ProcessModules(vehicle, damageTaken);
                     }
 
-                    // DEBUG: Искусственный тест (гарантированный урон раз в 5 сек)
-                    if (UnityEngine.Random.value < 0.20f) 
-                    {
-                        Rocket.Core.Logging.Logger.Log($"[DEBUG TEST] Имитация попадания по {vehicle.instanceID}");
-                        ProcessModuleDamage(vehicle, state, 10);
-                    }
-
-                    // Обновляем последнее известное здоровье для следующего цикла
-                    state.LastKnownHealth = vehicle.health;
-
-                    // Физическая блокировка трансмиссии
-                    if (state.IsTransmissionBroken) ApplyTransmissionLock(vehicle);
+                    // 3. ОБНОВЛЕНИЕ СОСТОЯНИЯ
+                    // Мы обновляем LastHealth только после проверки на урон
+                    state.LastHealth = vehicle.health;
                 }
 
-                yield return new WaitForSeconds(5.0f);
+                // Сканирование каждые 0.5 секунды для высокой точности отслеживания твоих действий
+                yield return new WaitForSeconds(0.5f);
             }
-        }
-
-        private void ProcessModuleDamage(InteractableVehicle v, VehicleState s, int dmg)
-        {
-            // Шансы в режиме Debug (0.3 базовая вероятность + бонус от урона)
-            float chance = 0.3f + (dmg / 500f);
-
-            if (!s.IsFuelTankBroken && UnityEngine.Random.value < chance)
-            {
-                s.IsFuelTankBroken = true;
-                Rocket.Core.Logging.Logger.Log($"[MODULE] Бак пробит на {v.instanceID}");
-                Notify(v, "ВНИМАНИЕ: Пробит топливный бак!", Color.red);
-                StartCoroutine(FuelLeakRoutine(v, s));
-            }
-
-            if (!s.IsTransmissionBroken && UnityEngine.Random.value < chance)
-            {
-                s.IsTransmissionBroken = true;
-                Rocket.Core.Logging.Logger.Log($"[MODULE] Трансмиссия уничтожена на {v.instanceID}");
-                Notify(v, "КРИТ: Трансмиссия выведена из строя!", Color.red);
-            }
-        }
-
-        private void ApplyTransmissionLock(InteractableVehicle v)
-        {
-            var rb = v.GetComponent<Rigidbody>();
-            if (rb != null && rb.velocity.magnitude > 0.1f)
-            {
-                rb.velocity = Vector3.zero;
-                rb.angularVelocity = Vector3.zero;
-            }
-        }
-
-        private IEnumerator FuelLeakRoutine(InteractableVehicle v, VehicleState s)
-        {
-            while (s.IsFuelTankBroken && v != null && !v.isExploded && v.fuel > 0)
-            {
-                v.fuel = (ushort)Mathf.Max(0, v.fuel - 15);
-                yield return new WaitForSeconds(1.0f);
-            }
-        }
-
-        private void Notify(InteractableVehicle v, string m, Color c)
-        {
-            if (v.passengers.Length > 0 && v.passengers[0].player != null)
-                UnturnedChat.Say(v.passengers[0].player.playerID.steamID, m, c);
         }
     }
 }
