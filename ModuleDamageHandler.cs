@@ -13,25 +13,18 @@ namespace VehicleModulesSystem
         {
             var cfg = VehicleModulesPlugin.Instance.Configuration.Instance;
             
-            // Если танк горит, экипажу не до новых поломок
             if (s.IsOnFire) return;
 
-            // 1. БАЛАНС УРОНА: Ограничиваем влияние "гигантского" урона от взрывов.
-            // Максимальный бонус к шансу поломки от одного удара составит +25% (0.25f).
             float intensity = Mathf.Clamp(dmg / 1500f, 0f, 0.25f); 
 
-            // 2. КОНТУЗИЯ (70% базовый шанс + интенсивность удара)
             if (!s.IsStunned && Random.value < (0.70f + intensity))
             {
                 VehicleModulesPlugin.Instance.StartCoroutine(StunRoutine(v, s));
             }
 
-            // 3. ЛИМИТ ПОЛОМОК: Танк не может развалиться весь от одного снаряда.
             int criticalsThisHit = 0;
-            int maxCriticals = dmg > 600 ? 2 : 1; // Мощный взрыв ломает до 2 модулей, обычный - 1
+            int maxCriticals = dmg > 600 ? 2 : 1; 
 
-            // 4. СИСТЕМА СПРАВЕДЛИВОГО РАНДОМА (Shuffle)
-            // Добавляем проверки в список, чтобы выбрать случайный модуль, который примет удар
             List<System.Action> moduleChecks = new List<System.Action>
             {
                 () => {
@@ -51,7 +44,7 @@ namespace VehicleModulesSystem
                 },
                 () => {
                     if (s.IsGunBroken) {
-                        if (Random.value < 0.25f) { // Взрыв казенника при повторном крите в орудие
+                        if (Random.value < 0.25f) { 
                             ExplodeBreach(v);
                             criticalsThisHit++;
                         }
@@ -63,7 +56,6 @@ namespace VehicleModulesSystem
                 }
             };
 
-            // Перемешиваем список, чтобы ни у одного модуля не было "приоритета"
             for (int i = 0; i < moduleChecks.Count; i++) {
                 System.Action temp = moduleChecks[i];
                 int randomIndex = Random.Range(i, moduleChecks.Count);
@@ -71,20 +63,16 @@ namespace VehicleModulesSystem
                 moduleChecks[randomIndex] = temp;
             }
 
-            // Выполняем проверки до исчерпания лимита поломок
             foreach (var check in moduleChecks) {
                 if (criticalsThisHit >= maxCriticals) break;
                 check.Invoke();
             }
 
-            // 5. РЕДКИЕ ЯВЛЕНИЯ: Пожар и Дым
-            // Пожар имеет минимальный шанс прока (3% база + небольшая часть от урона)
             if (!s.IsOnFire && Random.value < (0.03f + (intensity * 0.5f)))
             {
                 SendChat(v, "!!! ПОЖАР В БОЕВОМ ОТДЕЛЕНИИ !!!", Color.red);
                 VehicleModulesPlugin.Instance.StartCoroutine(FireRoutine(v, s));
             }
-            // Задымление срабатывает чаще пожара, но реже обычных поломок
             else if (!s.IsSmoking && Random.value < (cfg.ChanceSmoke + intensity))
             {
                 SendChat(v, "[ВНИМАНИЕ] Задымление боевого отделения!", Color.gray);
@@ -92,22 +80,107 @@ namespace VehicleModulesSystem
             }
         }
 
+        // --- ОБНОВЛЕННАЯ МЕХАНИКА ДЫМА (15 секунд, урон по 2 ХП в секунду) ---
         private static IEnumerator SmokeRoutine(InteractableVehicle v, VehicleState s)
         {
             s.IsSmoking = true;
-            while (s.IsSmoking && v != null && !v.isExploded)
+            int duration = 15; // Длительность задымления в секундах
+            int elapsed = 0;
+
+            while (s.IsSmoking && v != null && !v.isExploded && elapsed < duration)
             {
+                // Оставляем визуальный хлопок дыма внутри, чтобы было видно угрозу
                 EffectManager.sendEffect(110, 128, v.transform.position + Vector3.up * 1.5f);
                 
                 foreach (var p in v.passengers)
                 {
                     if (p.player != null)
                     {
-                        p.player.player.life.askDamage(10, Vector3.up, EDeathCause.BREATH, ELimb.SPINE, CSteamID.Nil, out EPlayerKill kill);
+                        // Снимаем по 2 ХП каждую секунду
+                        p.player.player.life.askDamage(2, Vector3.up, EDeathCause.BREATH, ELimb.SPINE, CSteamID.Nil, out EPlayerKill kill);
                     }
                 }
-                yield return new WaitForSeconds(2.0f); 
+                yield return new WaitForSeconds(1.0f);
+                elapsed++;
             }
+            
+            // Завершение эффекта
+            if (s != null)
+            {
+                s.IsSmoking = false;
+                if (v != null && !v.isExploded) SendChat(v, "[СИСТЕМА] Боевое отделение проветрено.", Color.green);
+            }
+        }
+
+        // --- НОВАЯ МЕХАНИКА: ПОЛЕВОЙ РЕМОНТ ---
+        public static IEnumerator RepairRoutine(InteractableVehicle v, VehicleState s, ushort stationId, float radius)
+        {
+            s.IsRepairing = true;
+            SendChat(v, ">> ИНИЦИИРОВАН ПОЛЕВОЙ РЕМОНТ. НЕ ПОКИДАЙТЕ ЗОНУ 35 СЕКУНД <<", Color.cyan);
+            
+            int repairTime = 35;
+            
+            for (int i = 0; i < repairTime; i++)
+            {
+                if (v == null || v.isExploded) 
+                {
+                    if (s != null) s.IsRepairing = false;
+                    yield break;
+                }
+
+                // Проверка: находится ли танк всё ещё рядом со станцией починки
+                if (!IsNearRepairStation(v.transform.position, stationId, radius))
+                {
+                    SendChat(v, "!!! РЕМОНТ ПРЕРВАН: Техника покинула зону обслуживания !!!", Color.red);
+                    s.IsRepairing = false;
+                    yield break;
+                }
+
+                // Уведомления экипажу каждые 10 секунд
+                if (i > 0 && i % 10 == 0) 
+                {
+                    SendChat(v, $"... Восстановление систем: осталось {repairTime - i} сек ...", Color.gray);
+                }
+
+                yield return new WaitForSeconds(1.0f);
+            }
+
+            // Успешный финал: чиним ХП и сбрасываем все статусы поломок
+            v.askRepair(v.asset.health); // Восстанавливаем ХП машины на 100%
+            VehicleManager.sendVehicleHealth(v, v.health); // Синхронизируем для всех
+            
+            s.IsFuelTankBroken = false;
+            s.IsTransmissionBroken = false;
+            s.IsGunBroken = false;
+            s.IsOnFire = false;
+            s.IsSmoking = false;
+            s.IsStunned = false;
+            s.IsRepairing = false;
+            
+            SendChat(v, ">> ТЕХНИКА ПОЛНОСТЬЮ ВОССТАНОВЛЕНА. ГОТОВНОСТЬ К БОЮ 100% <<", Color.green);
+        }
+
+        // Вспомогательный метод для поиска баррикады-станции (Абсолютно безопасен и оптимизирован)
+        public static bool IsNearRepairStation(Vector3 position, ushort targetId, float radius)
+        {
+            float sqrRadius = radius * radius;
+            for (byte x = 0; x < Regions.WORLD_SIZE; x++)
+            {
+                for (byte y = 0; y < Regions.WORLD_SIZE; y++)
+                {
+                    if (BarricadeManager.regions[x, y] != null)
+                    {
+                        foreach (BarricadeDrop drop in BarricadeManager.regions[x, y].drops)
+                        {
+                            if (drop.asset.id == targetId && (drop.model.position - position).sqrMagnitude <= sqrRadius)
+                            {
+                                return true; // Нашли нужную станцию в радиусе!
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
         }
 
         private static IEnumerator FireRoutine(InteractableVehicle v, VehicleState s)
@@ -115,15 +188,12 @@ namespace VehicleModulesSystem
             s.IsOnFire = true;
             while (s.IsOnFire && v != null && !v.isExploded)
             {
-                // ПРОФЕССИОНАЛЬНОЕ РАСПРОСТРАНЕНИЕ ОГНЯ
-                // Каждый тик (0.8с) мы спавним 3 эффекта искр/огня в СЛУЧАЙНЫХ координатах корпуса.
-                // Танк будет казаться полностью охваченным пламенем со всех сторон.
                 for (int i = 0; i < 3; i++)
                 {
                     Vector3 randomOffset = 
-                        v.transform.right * Random.Range(-1.5f, 1.5f) +     // Ширина: от левого до правого борта
-                        v.transform.forward * Random.Range(-3.5f, 3.5f) +   // Длина: от кормы до носа
-                        Vector3.up * Random.Range(1.8f, 3.0f);              // Высота: по всей верхней проекции
+                        v.transform.right * Random.Range(-1.5f, 1.5f) +     
+                        v.transform.forward * Random.Range(-3.5f, 3.5f) +   
+                        Vector3.up * Random.Range(1.8f, 3.0f);              
 
                     EffectManager.sendEffect(139, 128, v.transform.position + randomOffset);
                 }
