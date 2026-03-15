@@ -4,14 +4,13 @@ using System.Collections;
 using Rocket.API;
 using Rocket.Core.Plugins;
 using Rocket.Unturned.Chat;
-using Rocket.Unturned.Player;
 using Rocket.Unturned.Events;
+using Rocket.Unturned.Player;
 using SDG.Unturned;
 using UnityEngine;
 
 namespace VehicleModulesSystem
 {
-    // Класс состояния с поддержкой всех модулей
     public class VehicleState
     {
         public ushort LastHealth;
@@ -32,11 +31,13 @@ namespace VehicleModulesSystem
         protected override void Load()
         {
             Instance = this;
-
-            // ФИКС ВЕЧНОГО КУРСОРA: Используем надежное событие RocketMod
             UnturnedPlayerEvents.OnPlayerDeath += OnPlayerDeath;
             
+            Rocket.Core.Logging.Logger.Log("================================================");
             Rocket.Core.Logging.Logger.Log("--- [OBSERVER] Система мониторинга запущена ---");
+            Rocket.Core.Logging.Logger.Log("--- Протокол: Дизельпанк / Grimdark 1917+ ---");
+            Rocket.Core.Logging.Logger.Log("================================================");
+            
             StartCoroutine(VehicleHealthWatcher());
         }
 
@@ -45,82 +46,70 @@ namespace VehicleModulesSystem
             UnturnedPlayerEvents.OnPlayerDeath -= OnPlayerDeath;
             StopAllCoroutines();
             TrackedVehicles.Clear();
-            Rocket.Core.Logging.Logger.Log("--- [OBSERVER] Система остановлена ---");
+            Rocket.Core.Logging.Logger.Log("[OBSERVER] Система аварийно остановлена.");
         }
 
-        // Обработчик смерти для сброса блокировки управления
         private void OnPlayerDeath(UnturnedPlayer player, EDeathCause cause, ELimb limb, Steamworks.CSteamID murderer)
         {
             if (player != null && player.Player != null)
             {
                 player.Player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
+                Rocket.Core.Logging.Logger.Log($"[STUN_FIX] Сброшен Modal для игрока: {player.CharacterName}");
             }
         }
 
-        // ОБЪЕДИНЕННЫЙ ЭТАЛОННЫЙ ДАТЧИК
         private IEnumerator VehicleHealthWatcher()
         {
             yield return new WaitForSeconds(3.0f);
             while (true)
             {
-                if (VehicleManager.vehicles == null)
-                {
-                    yield return new WaitForSeconds(1.0f);
-                    continue;
-                }
+                if (VehicleManager.vehicles == null) { yield return new WaitForSeconds(1.0f); continue; }
 
                 for (int i = VehicleManager.vehicles.Count - 1; i >= 0; i--)
                 {
                     var vehicle = VehicleManager.vehicles[i];
-                    
-                    // 1. Проверка валидности
-                    if (vehicle == null || vehicle.asset == null || vehicle.isExploded) 
+                    if (vehicle == null || vehicle.isExploded) 
                     {
                         if (vehicle != null && TrackedVehicles.ContainsKey(vehicle.instanceID))
                             TrackedVehicles.Remove(vehicle.instanceID);
                         continue;
                     }
 
-                    // 2. Инициализация состояния
                     if (!TrackedVehicles.TryGetValue(vehicle.instanceID, out VehicleState state))
                     {
                         state = new VehicleState { InstanceID = vehicle.instanceID, LastHealth = vehicle.health };
                         TrackedVehicles.Add(vehicle.instanceID, state);
-                        Rocket.Core.Logging.Logger.Log($"[NEW] Датчик установлен: {vehicle.asset.vehicleName}");
+                        Rocket.Core.Logging.Logger.Log($"[NEW] Объект взят на мониторинг: {vehicle.asset.vehicleName} (ID: {vehicle.instanceID})");
                         continue;
                     }
 
-                    // 3. МАГИЯ ОТСЛЕЖИВАНИЯ УРОНА
+                    // --- РАСШИРЕННЫЙ ДАТЧИК УРОНА ---
                     if (vehicle.health < state.LastHealth)
                     {
                         int damageTaken = state.LastHealth - vehicle.health;
-                        Rocket.Core.Logging.Logger.Log($"[DAMAGE] {vehicle.asset.vehicleName} получил {damageTaken} урона!");
-                        UnturnedChat.Say($"[Датчик] {vehicle.asset.vehicleName} получил {damageTaken} ед. урона!", Color.yellow);
+                        Rocket.Core.Logging.Logger.Log($"[DAMAGE_EVENT] {vehicle.asset.vehicleName} получил {damageTaken} урона. (Остаток: {vehicle.health})");
                         
-                        // Отправка данных в обработчик эффектов
+                        // Сообщение экипажу о получении урона
+                        ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона! Состояние: {vehicle.health}/{vehicle.asset.health}", Color.yellow);
+                        
                         ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
                     }
                     else if (vehicle.health > state.LastHealth)
                     {
-                        Rocket.Core.Logging.Logger.Log($"[REPAIR] Техника {vehicle.asset.vehicleName} была починена.");
+                        Rocket.Core.Logging.Logger.Log($"[REPAIR_EVENT] {vehicle.asset.vehicleName} восстановлен: {state.LastHealth} -> {vehicle.health}");
                     }
 
-                    // 4. ПРИНУДИТЕЛЬНОЕ ПОДАВЛЕНИЕ (ФИЗИКА И АККУМУЛЯТОР)
-                    // Остановка танка при контузии или поломке трансмиссии
-                    if (state.IsStunned || (state.IsTransmissionBroken && vehicle.batteryCharge == 0))
+                    // --- ПОДАВЛЕНИЕ СИСТЕМ ---
+                    if (state.IsStunned)
                     {
                         var rb = vehicle.GetComponent<Rigidbody>();
-                        if (rb != null) 
-                        { 
-                            rb.velocity = Vector3.zero; 
-                            rb.angularVelocity = Vector3.zero; 
-                        }
+                        if (rb != null) { rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero; }
                     }
 
-                    // ФИКС АККУМУЛЯТОРА: Постоянный сброс в 0 при выбитой трансмиссии
                     if (state.IsTransmissionBroken && vehicle.batteryCharge > 0)
                     {
                         vehicle.batteryCharge = 0;
+                        VehicleManager.sendVehicleBattery(vehicle, 0);
                     }
 
                     state.LastHealth = vehicle.health;
