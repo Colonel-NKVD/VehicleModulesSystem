@@ -21,12 +21,14 @@ namespace VehicleModulesSystem
         public bool IsOnFire;
         public bool IsSmoking;
         public bool IsStunned;
-        public bool IsRepairing;
+        public bool IsRepairing; // Флаг для системы починки
     }
 
     public class VehicleModulesPlugin : RocketPlugin<VehicleModulesConfig> 
     {
         public static VehicleModulesPlugin Instance;
+        
+        // Основной словарь отслеживания техники
         public Dictionary<uint, VehicleState> TrackedVehicles = new Dictionary<uint, VehicleState>();
 
         protected override void Load()
@@ -48,6 +50,20 @@ namespace VehicleModulesSystem
             StopAllCoroutines();
             TrackedVehicles.Clear();
             Rocket.Core.Logging.Logger.Log("[OBSERVER] Система аварийно остановлена.");
+        }
+
+        // Публичный метод для получения состояния техники (используется в командах)
+        public VehicleState GetVehicleState(InteractableVehicle v)
+        {
+            if (v == null) return null;
+            
+            if (!TrackedVehicles.TryGetValue(v.instanceID, out VehicleState state))
+            {
+                state = new VehicleState { InstanceID = v.instanceID, LastHealth = v.health };
+                TrackedVehicles.Add(v.instanceID, state);
+            }
+            
+            return state;
         }
 
         private void OnPlayerDeath(UnturnedPlayer player, EDeathCause cause, ELimb limb, Steamworks.CSteamID murderer)
@@ -76,13 +92,8 @@ namespace VehicleModulesSystem
                         continue;
                     }
 
-                    if (!TrackedVehicles.TryGetValue(vehicle.instanceID, out VehicleState state))
-                    {
-                        state = new VehicleState { InstanceID = vehicle.instanceID, LastHealth = vehicle.health };
-                        TrackedVehicles.Add(vehicle.instanceID, state);
-                        Rocket.Core.Logging.Logger.Log($"[NEW] Объект взят на мониторинг: {vehicle.asset.vehicleName} (ID: {vehicle.instanceID})");
-                        continue;
-                    }
+                    // Используем наш метод для получения или создания состояния
+                    VehicleState state = GetVehicleState(vehicle);
 
                     // --- РАСШИРЕННЫЙ ДАТЧИК УРОНА ---
                     if (vehicle.health < state.LastHealth)
@@ -90,7 +101,6 @@ namespace VehicleModulesSystem
                         int damageTaken = state.LastHealth - vehicle.health;
                         Rocket.Core.Logging.Logger.Log($"[DAMAGE_EVENT] {vehicle.asset.vehicleName} получил {damageTaken} урона. (Остаток: {vehicle.health})");
                         
-                        // Сообщение экипажу о получении урона
                         ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона! Состояние: {vehicle.health}/{vehicle.asset.health}", Color.yellow);
                         
                         ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
@@ -110,7 +120,6 @@ namespace VehicleModulesSystem
                     if (state.IsTransmissionBroken && vehicle.batteryCharge > 0)
                     {
                         vehicle.batteryCharge = 0;
-                        // Исправлено: Синхронизация через FuelManager, так как sendVehicleBattery не существует
                         VehicleManager.sendVehicleFuel(vehicle, vehicle.fuel);
                     }
 
