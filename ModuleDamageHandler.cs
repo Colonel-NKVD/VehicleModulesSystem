@@ -12,7 +12,20 @@ namespace VehicleModulesSystem
         {
             var cfg = VehicleModulesPlugin.Instance.Configuration.Instance;
             float roll = Random.value;
+            // Интенсивность зависит от урона
             float intensity = dmg / 500f;
+
+            // --- БЛОКИРОВКА ЭФФЕКТОВ ПРИ ПОЖАРЕ ---
+            // Если танк уже горит, мы блокируем выпадение НОВЫХ критических эффектов
+            // от урона, который наносит сам пожар или внешние источники.
+            if (s.IsOnFire)
+            {
+                // Урон технике всё равно наносится (в FireRoutine),
+                // но новые проверки на криты не проводятся.
+                return; 
+            }
+
+            // --- ПРОВЕРКА КРИТИЧЕСКИХ ЭФФЕКТОВ (Только если нет пожара) ---
 
             // 1. ТОПЛИВНЫЙ БАК (ID 16)
             if (!s.IsFuelTankBroken && roll < (cfg.ChanceFuelLeak + intensity))
@@ -46,7 +59,7 @@ namespace VehicleModulesSystem
                 Rocket.Core.Logging.Logger.Log($"[CRIT] {v.asset.vehicleName}: Орудие выведено из строя.");
             }
 
-            // 4. ПОЖАР (ID 139)
+            // 4. ПОЖАР (ID 139 - Искры/Обломки, используем как огонь на корпусе)
             if (!s.IsOnFire && roll < (cfg.ChanceFire + intensity))
             {
                 SendChat(v, "!!! ПОЖАР В МЕХАНИЗМАХ !!!", Color.red);
@@ -87,7 +100,7 @@ namespace VehicleModulesSystem
             s.IsSmoking = true;
             while (s.IsSmoking && v != null && !v.isExploded)
             {
-                // ИСПРАВЛЕНО: Добавлен радиус 128 для соответствия перегрузке метода
+                // ID, Radius, Position
                 EffectManager.sendEffect(110, 128, v.transform.position);
                 foreach (var p in v.passengers)
                     if (p.player != null) p.player.player.life.askSuffocate(15);
@@ -100,8 +113,16 @@ namespace VehicleModulesSystem
             s.IsOnFire = true;
             while (s.IsOnFire && v != null && !v.isExploded)
             {
-                // ИСПРАВЛЕНО: Добавлен радиус 128
-                EffectManager.sendEffect(139, 128, v.transform.position + Vector3.up);
+                // ПРОФЕССИОНАЛЬНОЕ РАЗМЕЩЕНИЕ ОГНЯ НА КОРПУСЕ
+                // Спавним 3 эффекта в разных точках корпуса, приподнятых вверх.
+                // Точка 1: Центр корпуса, чуть выше
+                EffectManager.sendEffect(139, 128, v.transform.position + Vector3.up * 1.5f);
+                // Точка 2: Спереди корпуса (используем transform.forward)
+                EffectManager.sendEffect(139, 128, v.transform.position + v.transform.forward * 2.0f + Vector3.up * 1.2f);
+                // Точка 3: Сзади корпуса
+                EffectManager.sendEffect(139, 128, v.transform.position - v.transform.forward * 2.0f + Vector3.up * 1.2f);
+
+                // Урон технике от огня
                 VehicleManager.damage(v, 120, 1, false);
                 yield return new WaitForSeconds(0.8f);
             }
@@ -111,7 +132,6 @@ namespace VehicleModulesSystem
         {
             while (s.IsFuelTankBroken && v != null && !v.isExploded && v.fuel > 0)
             {
-                // ИСПРАВЛЕНО: Добавлен радиус 128
                 EffectManager.sendEffect(16, 128, v.transform.position);
                 v.fuel = (ushort)Mathf.Max(0, v.fuel - 35);
                 VehicleManager.sendVehicleFuel(v, v.fuel);
@@ -126,6 +146,7 @@ namespace VehicleModulesSystem
             {
                 s.IsTransmissionBroken = true;
                 v.batteryCharge = 0;
+                // Синхронизация через FuelManager
                 VehicleManager.sendVehicleFuel(v, v.fuel); 
                 SendChat(v, "!!! КРИТ: Трансмиссия рассыпалась. Питание потеряно !!!", Color.red);
             }
@@ -133,7 +154,6 @@ namespace VehicleModulesSystem
 
         private static void ExplodeBreach(InteractableVehicle v)
         {
-            // ИСПРАВЛЕНО: Добавлен радиус 128
             EffectManager.sendEffect(45, 128, v.transform.position);
             VehicleManager.damage(v, 800, 1, false);
             foreach (var p in v.passengers)
