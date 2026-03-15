@@ -8,14 +8,13 @@ using Rocket.Unturned.Chat;
 using SDG.Unturned;
 using UnityEngine;
 using Steamworks;
+using HarmonyLib; // ТРЕБУЕТСЯ 0Harmony.dll
 
 namespace VehicleModulesSystem
 {
     public class VehicleState
     {
         public bool IsFuelTankBroken;
-        public bool IsTransmissionBroken;
-        public bool IsGunBroken;
         public bool IsOnFire;
         public bool IsSmoking;
     }
@@ -24,102 +23,80 @@ namespace VehicleModulesSystem
     {
         public static VehicleModulesPlugin Instance;
         public Dictionary<uint, VehicleState> TrackedVehicles = new Dictionary<uint, VehicleState>();
+        private Harmony _harmony;
 
         protected override void Load()
         {
             Instance = this;
 
-            // ПОДПИСКА: Самый актуальный делегат требует именно два REF параметра.
-            VehicleManager.onDamageVehicleRequested += OnDamageRequested;
-            
-            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: [Elite Build] Система инициализирована через DamageVehicleParameters.");
+            // ГРЯЗНЫЙ ХАК: Вместо подписки на событие с битой структурой, мы патчим метод напрямую
+            _harmony = new Harmony("com.vehiclemodules.patch");
+            _harmony.PatchAll();
+
+            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: [HARMONY BYPASS] Система внедрена в движок. Игнорируем DamageVehicleParameters.");
         }
 
         protected override void Unload()
         {
-            VehicleManager.onDamageVehicleRequested -= OnDamageRequested;
+            _harmony.UnpatchAll("com.vehiclemodules.patch");
             StopAllCoroutines();
             TrackedVehicles.Clear();
         }
 
-        // РЕШЕНИЕ CS0123 и CS0246:
-        // Используем полное имя типа SDG.Unturned.DamageVehicleParameters.
-        // Это "пробивает" любые проблемы с областью видимости типов в проекте.
-        private void OnDamageRequested(ref SDG.Unturned.DamageVehicleParameters parameters, ref bool shouldAllow)
+        // Этот метод будет вызываться каждый раз, когда КТО-ТО или ЧТО-ТО наносит урон машине
+        public void InternalOnVehicleDamage(InteractableVehicle vehicle, ushort damage)
         {
-            // Получаем объект транспорта напрямую из структуры параметров
-            InteractableVehicle vehicle = parameters.vehicle;
-
             if (vehicle == null || vehicle.asset == null) return;
-            
-            // Фильтрация по ID из конфига
             if (!Configuration.Instance.TargetedVehicleIds.Contains(vehicle.asset.id)) return;
 
-            // Идентификация конкретного экземпляра по instanceID
             if (!TrackedVehicles.TryGetValue(vehicle.instanceID, out VehicleState state))
             {
                 state = new VehicleState();
                 TrackedVehicles.Add(vehicle.instanceID, state);
             }
 
-            ProcessAdvancedDamage(vehicle, state);
-        }
-
-        private void ProcessAdvancedDamage(InteractableVehicle v, VehicleState s)
-        {
-            var config = Configuration.Instance;
-            CSteamID? driver = GetDriver(v);
-
-            // Логика повреждения модулей
-            if (UnityEngine.Random.value < config.ChanceFuelLeak && !s.IsFuelTankBroken)
+            // Шанс возгорания при любом уроне
+            if (UnityEngine.Random.value < Configuration.Instance.ChanceFire && !state.IsOnFire)
             {
-                s.IsFuelTankBroken = true;
-                if (driver.HasValue) UnturnedChat.Say(driver.Value, "КРИТИЧЕСКИЙ УРОН: Топливный бак пробит!", Color.red);
-                StartCoroutine(FuelLeakLoop(v, s));
-            }
-
-            if (UnityEngine.Random.value < config.ChanceFire) StartCoroutine(FireLoop(v, s));
-        }
-
-        private void SpawnModernEffect(ushort id, Vector3 pos)
-        {
-            // Устраняем CS0618 через современный API
-            EffectAsset asset = Assets.find(EAssetType.EFFECT, id) as EffectAsset;
-            if (asset != null)
-            {
-                TriggerEffectParameters parameters = new TriggerEffectParameters(asset);
-                parameters.position = pos;
-                parameters.relevantDistance = 128f;
-                EffectManager.triggerEffect(parameters);
+                StartCoroutine(FireRoutine(vehicle, state));
             }
         }
 
-        private CSteamID? GetDriver(InteractableVehicle v)
+        private IEnumerator FireRoutine(InteractableVehicle v, VehicleState s)
         {
-            if (v.passengers != null && v.passengers.Length > 0 && v.passengers[0].player != null)
-                return v.passengers[0].player.playerID.steamID;
-            return null;
-        }
-
-        private IEnumerator FuelLeakLoop(InteractableVehicle v, VehicleState s)
-        {
-            while (s.IsFuelTankBroken && v != null && !v.isExploded && v.fuel > 0)
-            {
-                v.fuel -= 2;
-                yield return new WaitForSeconds(1f);
-            }
-        }
-
-        private IEnumerator FireLoop(InteractableVehicle v, VehicleState s)
-        {
-            if (s.IsOnFire) yield break;
             s.IsOnFire = true;
-            SpawnModernEffect(125, v.transform.position);
+            SpawnEffect(125, v.transform.position);
             for (int i = 0; i < 5; i++)
             {
                 if (v == null || v.isExploded) break;
-                VehicleManager.damage(v, 200, 1, false);
-                yield return new WaitForSeconds(1.5f);
+                VehicleManager.damage(v, 150, 1, false);
+                yield return new WaitForSeconds(1.2f);
+            }
+        }
+
+        private void SpawnEffect(ushort id, Vector3 pos)
+        {
+            if (Assets.find(EAssetType.EFFECT, id) is EffectAsset asset)
+            {
+                TriggerEffectParameters e = new TriggerEffectParameters(asset);
+                e.position = pos;
+                e.relevantDistance = 128f;
+                EffectManager.triggerEffect(e);
+            }
+        }
+    }
+
+    // ПАТЧ: Врезаемся в основной метод урона техники Unturned
+    [HarmonyPatch(typeof(VehicleManager), "damage")]
+    public static class VehicleDamagePatch
+    {
+        [HarmonyPrefix]
+        public static void Prefix(InteractableVehicle vehicle, ushort damage, float times, bool canBeRepairing)
+        {
+            // Вызываем логику нашего плагина, обходя все структуры DamageVehicleParameters
+            if (VehicleModulesPlugin.Instance != null && !canBeRepairing)
+            {
+                VehicleModulesPlugin.Instance.InternalOnVehicleDamage(vehicle, (ushort)(damage * times));
             }
         }
     }
