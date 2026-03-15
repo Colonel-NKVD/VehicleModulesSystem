@@ -21,6 +21,7 @@ namespace VehicleModulesSystem
         public bool IsOnFire;
         public bool IsSmoking;
         public bool IsStunned;
+        public bool IsRepairing;
     }
 
     public class VehicleModulesPlugin : RocketPlugin<VehicleModulesConfig> 
