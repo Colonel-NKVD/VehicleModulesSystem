@@ -11,7 +11,6 @@ using Steamworks;
 
 namespace VehicleModulesSystem
 {
-    // Расширенное состояние модуля
     public class VehicleState
     {
         public ushort LastHealth;
@@ -19,22 +18,19 @@ namespace VehicleModulesSystem
         public bool IsTransmissionBroken;
         public bool IsGunBroken;
         public bool IsOnFire;
+        public bool IsSmoking; // ДОБАВЛЕНО: Теперь CommandVfix увидит это поле
     }
 
     public class VehicleModulesPlugin : RocketPlugin<VehicleModulesConfig>
     {
         public static VehicleModulesPlugin Instance;
-        // Словарь состояний: ключ - уникальный ID экземпляра машины
         public Dictionary<uint, VehicleState> TrackedVehicles = new Dictionary<uint, VehicleState>();
 
         protected override void Load()
         {
             Instance = this;
-            
-            // Запускаем корутину-наблюдатель. Это сердце плагина.
             StartCoroutine(VehicleHealthObserver());
-            
-            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: Наблюдатель за здоровьем активен. Модули запущены.");
+            Rocket.Core.Logging.Logger.Log("VehicleModulesSystem: Наблюдатель запущен. Использование актуальных API (TriggerEffectParameters).");
         }
 
         protected override void Unload()
@@ -43,28 +39,17 @@ namespace VehicleModulesSystem
             TrackedVehicles.Clear();
         }
 
-        // Профессиональный цикл отслеживания
         private IEnumerator VehicleHealthObserver()
         {
             while (true)
             {
-                // Используем глобальный менеджер машин Unturned
                 for (int i = VehicleManager.vehicles.Count - 1; i >= 0; i--)
                 {
                     var vehicle = VehicleManager.vehicles[i];
-                    if (vehicle == null || vehicle.asset == null) continue;
+                    if (vehicle == null || vehicle.asset == null || vehicle.isExploded) continue;
 
-                    // Проверяем, входит ли ID машины в список обрабатываемых в конфиге
                     if (!Configuration.Instance.TargetedVehicleIds.Contains(vehicle.asset.id)) continue;
 
-                    // Если машина взорвана, удаляем её из слежки
-                    if (vehicle.isExploded)
-                    {
-                        TrackedVehicles.Remove(vehicle.instanceID);
-                        continue;
-                    }
-
-                    // Если машина новая, регистрируем её начальное здоровье
                     if (!TrackedVehicles.TryGetValue(vehicle.instanceID, out VehicleState state))
                     {
                         state = new VehicleState { LastHealth = vehicle.health };
@@ -72,54 +57,59 @@ namespace VehicleModulesSystem
                         continue;
                     }
 
-                    // КЛЮЧЕВОЙ МОМЕНТ: Сравнение текущего здоровья с прошлым кадром
+                    // Обработка урона
                     if (vehicle.health < state.LastHealth)
                     {
-                        // Вычисляем размер полученного урона
                         int damageTaken = state.LastHealth - vehicle.health;
                         ExecuteDamageLogic(vehicle, state, damageTaken);
                     }
 
-                    // Обновляем "последнее известное здоровье"
+                    // ОБХОД READ-ONLY SPEED: Если трансмиссия сломана, принудительно гасим инерцию
+                    if (state.IsTransmissionBroken)
+                    {
+                        ForceStopVehicle(vehicle);
+                    }
+
                     state.LastHealth = vehicle.health;
                 }
-
-                // Пауза 0.1 сек (оптимально для производительности и точности)
                 yield return new WaitForSeconds(0.1f);
+            }
+        }
+
+        private void ForceStopVehicle(InteractableVehicle v)
+        {
+            // Поскольку .speed теперь read-only, мы работаем напрямую с Rigidbody
+            // Это профессиональный способ остановить технику в Unturned
+            if (v.GetComponent<Rigidbody>() is Rigidbody rb)
+            {
+                rb.velocity = Vector3.zero;
+                rb.angularVelocity = Vector3.zero;
             }
         }
 
         private void ExecuteDamageLogic(InteractableVehicle v, VehicleState s, int damage)
         {
             var cfg = Configuration.Instance;
+            float damageFactor = damage / 100f;
 
-            // Вероятность повреждения зависит от тяжести урона
-            float damageMultiplier = damage / 100f; 
-
-            // 1. Пробитие бака (утечка топлива)
-            if (!s.IsFuelTankBroken && UnityEngine.Random.value < (cfg.ChanceFuelLeak + damageMultiplier))
+            if (!s.IsFuelTankBroken && UnityEngine.Random.value < (cfg.ChanceFuelLeak + damageFactor))
             {
                 s.IsFuelTankBroken = true;
                 NotifyVehicle(v, "ВНИМАНИЕ: Пробит топливный бак!", Color.red);
                 StartCoroutine(FuelLeakRoutine(v, s));
             }
 
-            // 2. Повреждение трансмиссии (остановка)
-            if (!s.IsTransmissionBroken && UnityEngine.Random.value < (cfg.ChanceTransmission + damageMultiplier))
+            if (!s.IsTransmissionBroken && UnityEngine.Random.value < (cfg.ChanceTransmission + damageFactor))
             {
                 s.IsTransmissionBroken = true;
-                NotifyVehicle(v, "КРИТ: Трансмиссия выведена из строя!", Color.red);
-                v.speed = 0; // Мгновенное замедление
+                NotifyVehicle(v, "КРИТ: Трансмиссия уничтожена!", Color.red);
             }
 
-            // 3. Возгорание
-            if (!s.IsOnFire && UnityEngine.Random.value < (cfg.ChanceFire + damageMultiplier))
+            if (!s.IsOnFire && UnityEngine.Random.value < (cfg.ChanceFire + damageFactor))
             {
                 StartCoroutine(FireRoutine(v, s));
             }
         }
-
-        // --- Подсистемы модулей ---
 
         private IEnumerator FuelLeakRoutine(InteractableVehicle v, VehicleState s)
         {
@@ -133,16 +123,31 @@ namespace VehicleModulesSystem
         private IEnumerator FireRoutine(InteractableVehicle v, VehicleState s)
         {
             s.IsOnFire = true;
-            EffectManager.sendEffect(125, 128, v.transform.position); // Эффект огня
+            s.IsSmoking = true; // Устанавливаем статус для CommandVfix
             
-            for (int i = 0; i < 7; i++)
+            while (s.IsOnFire && v != null && !v.isExploded)
             {
-                if (v == null || v.isExploded) break;
-                // Наносим постепенный урон от огня
+                TriggerModernEffect(125, v.transform.position);
                 VehicleManager.damage(v, 150, 1, false);
                 yield return new WaitForSeconds(1.5f);
+                
+                // Если машина починена через команду во время пожара
+                if (!s.IsOnFire) break; 
             }
             s.IsOnFire = false;
+        }
+
+        // РЕШЕНИЕ CS0618: Используем TriggerEffectParameters вместо устаревшего sendEffect
+        private void TriggerModernEffect(ushort id, Vector3 pos)
+        {
+            EffectAsset asset = Assets.find(EAssetType.EFFECT, id) as EffectAsset;
+            if (asset != null)
+            {
+                TriggerEffectParameters parameters = new TriggerEffectParameters(asset);
+                parameters.position = pos;
+                parameters.relevantDistance = 128f;
+                EffectManager.triggerEffect(parameters);
+            }
         }
 
         private void NotifyVehicle(InteractableVehicle v, string text, Color color)
