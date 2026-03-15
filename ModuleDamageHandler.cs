@@ -87,8 +87,8 @@ namespace VehicleModulesSystem
             s.IsSmoking = true;
             while (s.IsSmoking && v != null && !v.isExploded)
             {
-                // Убрано значение 128
-                EffectManager.sendEffect(110, v.transform.position);
+                // ИСПРАВЛЕНО: Добавлен радиус 128 для соответствия перегрузке метода
+                EffectManager.sendEffect(110, 128, v.transform.position);
                 foreach (var p in v.passengers)
                     if (p.player != null) p.player.player.life.askSuffocate(15);
                 yield return new WaitForSeconds(1.5f); 
@@ -100,8 +100,8 @@ namespace VehicleModulesSystem
             s.IsOnFire = true;
             while (s.IsOnFire && v != null && !v.isExploded)
             {
-                // Убрано значение 128
-                EffectManager.sendEffect(139, v.transform.position + Vector3.up);
+                // ИСПРАВЛЕНО: Добавлен радиус 128
+                EffectManager.sendEffect(139, 128, v.transform.position + Vector3.up);
                 VehicleManager.damage(v, 120, 1, false);
                 yield return new WaitForSeconds(0.8f);
             }
@@ -111,8 +111,8 @@ namespace VehicleModulesSystem
         {
             while (s.IsFuelTankBroken && v != null && !v.isExploded && v.fuel > 0)
             {
-                // Убрано значение 128
-                EffectManager.sendEffect(16, v.transform.position);
+                // ИСПРАВЛЕНО: Добавлен радиус 128
+                EffectManager.sendEffect(16, 128, v.transform.position);
                 v.fuel = (ushort)Mathf.Max(0, v.fuel - 35);
                 VehicleManager.sendVehicleFuel(v, v.fuel);
                 yield return new WaitForSeconds(1.0f);
@@ -133,7 +133,8 @@ namespace VehicleModulesSystem
 
         private static void ExplodeBreach(InteractableVehicle v)
         {
-            EffectManager.sendEffect(45, v.transform.position);
+            // ИСПРАВЛЕНО: Добавлен радиус 128
+            EffectManager.sendEffect(45, 128, v.transform.position);
             VehicleManager.damage(v, 800, 1, false);
             foreach (var p in v.passengers)
                 if (p.player != null)
