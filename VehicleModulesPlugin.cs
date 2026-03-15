@@ -34,6 +34,12 @@ namespace VehicleModulesSystem
             Instance = this;
             UnturnedPlayerEvents.OnPlayerDeath += OnPlayerDeath;
             
+            // Проверка на случай, если конфиг не загрузился корректно
+            if (Configuration.Instance.AllowedVehicleIds == null)
+            {
+                Configuration.Instance.AllowedVehicleIds = new List<ushort>();
+            }
+            
             Rocket.Core.Logging.Logger.Log("================================================");
             Rocket.Core.Logging.Logger.Log("--- [OBSERVER] Система мониторинга запущена ---");
             Rocket.Core.Logging.Logger.Log("--- Протокол: Дизельпанк / Grimdark 1917+ ---");
@@ -76,37 +82,30 @@ namespace VehicleModulesSystem
             {
                 if (VehicleManager.vehicles == null) { yield return new WaitForSeconds(1.0f); continue; }
 
+                // Извлечение списка один раз за итерацию для безопасности
+                var allowedIds = Configuration.Instance?.AllowedVehicleIds;
+
                 for (int i = VehicleManager.vehicles.Count - 1; i >= 0; i--)
                 {
                     var vehicle = VehicleManager.vehicles[i];
                     
-                    // --- КРИТИЧЕСКИЙ ФИЛЬТР ПО ID ---
-                    // Проверяем: существует ли машина, не взорвана ли она и есть ли её ID в списке разрешенных в конфиге
-                    if (vehicle == null || vehicle.isExploded || Configuration.Instance.AllowedVehicleIds == null || !Configuration.Instance.AllowedVehicleIds.Contains(vehicle.id)) 
+                    // Улучшенная проверка: игнорируем, если машины нет, она взорвана или её ID нет в списке
+                    if (vehicle == null || vehicle.isExploded || allowedIds == null || !allowedIds.Contains(vehicle.id)) 
                     {
-                        // Если машина не в списке (или конфиг пуст), удаляем её из мониторинга и идем дальше
                         if (vehicle != null && TrackedVehicles.ContainsKey(vehicle.instanceID))
                             TrackedVehicles.Remove(vehicle.instanceID);
                         continue;
                     }
 
-                    // Если код дошел сюда — значит танк "свой" и мы начинаем работу
                     VehicleState state = GetVehicleState(vehicle);
 
-                    // Расширенный датчик урона
                     if (vehicle.health < state.LastHealth)
                     {
                         int damageTaken = state.LastHealth - vehicle.health;
                         ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона! Состояние: {vehicle.health}/{vehicle.asset.health}", Color.yellow);
                         ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
                     }
-                    else if (vehicle.health > state.LastHealth)
-                    {
-                        // Просто лог восстановления (например, обычной ремкой)
-                        // state.LastHealth обновится в конце цикла
-                    }
 
-                    // Физическая заморозка при контузии (Stun)
                     if (state.IsStunned)
                     {
                         var rb = vehicle.GetComponent<Rigidbody>();
@@ -117,11 +116,10 @@ namespace VehicleModulesSystem
                         }
                     }
 
-                    // Блокировка хода при поломке трансмиссии (слив батареи)
                     if (state.IsTransmissionBroken && vehicle.batteryCharge > 0)
                     {
                         vehicle.batteryCharge = 0;
-                        VehicleManager.sendVehicleFuel(vehicle, vehicle.fuel); // Синхронизация состояния
+                        VehicleManager.sendVehicleFuel(vehicle, vehicle.fuel);
                     }
 
                     state.LastHealth = vehicle.health;
