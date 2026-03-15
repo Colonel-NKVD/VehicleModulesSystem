@@ -8,140 +8,163 @@ namespace VehicleModulesSystem
 {
     public static class ModuleDamageHandler
     {
-        public static void ProcessDamage(InteractableVehicle vehicle, VehicleState state, int damage)
+        public static void ProcessDamage(InteractableVehicle v, VehicleState s, int dmg)
         {
             var cfg = VehicleModulesPlugin.Instance.Configuration.Instance;
             float roll = Random.value;
-            float intensity = damage / 500f; // Модификатор от силы удара
+            float intensity = dmg / 500f;
 
-            // --- ЛОГИКА МОДУЛЕЙ ---
+            // --- КРИТИЧЕСКИЕ ПОВРЕЖДЕНИЯ МОДУЛЕЙ ---
 
-            // 1. Топливные баки (Утечка)
-            if (!state.IsFuelTankBroken && roll < (cfg.ChanceFuelLeak + intensity))
+            // 1. Топливо (Расход увеличен для реализма)
+            if (!s.IsFuelTankBroken && roll < (cfg.ChanceFuelLeak + intensity))
             {
-                state.IsFuelTankBroken = true;
-                SendMessage(vehicle, "КРИТ: Топливный бак пробит! Утечка горючего.", Color.red);
-                VehicleModulesPlugin.Instance.StartCoroutine(FuelLeakRoutine(vehicle, state));
+                s.IsFuelTankBroken = true;
+                Send(v, "ВНИМАНИЕ: Пробит топливный бак! Утечка горючего.", Color.red);
+                VehicleModulesPlugin.Instance.StartCoroutine(FuelRoutine(v, s));
             }
 
-            // 2. Трансмиссия (Потеря аккумулятора через время)
-            if (!state.IsTransmissionBroken && roll < (cfg.ChanceTransmission + intensity))
+            // 2. Трансмиссия (Полная остановка через время)
+            if (!s.IsTransmissionBroken && roll < (cfg.ChanceTransmission + intensity))
             {
-                state.IsTransmissionBroken = true;
-                SendMessage(vehicle, "КРИТ: Повреждение трансмиссии! Электроника откажет через 20с.", Color.yellow);
-                VehicleModulesPlugin.Instance.StartCoroutine(TransmissionFailureRoutine(vehicle, state));
+                s.IsTransmissionBroken = true;
+                Send(v, "КРИТ: Поломка трансмиссии. Скоро электроника выйдет из строя.", Color.yellow);
+                VehicleModulesPlugin.Instance.StartCoroutine(TransRoutine(v, s));
             }
 
-            // 3. Орудие (Детонация снаряда)
-            if (state.IsGunBroken)
+            // 3. Орудие (Разрыв казенника — фатально для башни)
+            if (s.IsGunBroken)
             {
-                if (Random.value < 0.50f) // 50% шанс детонации при каждом получении урона, если пушка уже сломана
-                {
-                    SendMessage(vehicle, "КАТАСТРОФА: Детонация снаряда в казеннике!", Color.red);
-                    VehicleManager.damage(vehicle, 500, 1, false); // Огромный внутренний урон
-                    ExplodeInternally(vehicle);
-                }
+                if (Random.value < 0.50f) ExplodeBreach(v);
             }
             else if (roll < (cfg.ChanceGunBroken + intensity))
             {
-                state.IsGunBroken = true;
-                SendMessage(vehicle, "КРИТ: Орудие заклинило! Риск детонации снаряда.", Color.red);
+                s.IsGunBroken = true;
+                Send(v, "КРИТ: Орудие заклинило!", Color.red);
             }
 
-            // --- ЛОГИКА ИВЕНТОВ ---
+            // --- ИВЕНТЫ (ВИЗУАЛ И ГЕЙМПЛЕЙ) ---
 
-            // Пожар
-            if (!state.IsOnFire && roll < (cfg.ChanceFire + intensity))
-            {
-                VehicleModulesPlugin.Instance.StartCoroutine(FireRoutine(vehicle, state));
-            }
+            // ПОЖАР (Эффект ID 125 — Чистое пламя)
+            if (!s.IsOnFire && roll < (cfg.ChanceFire + intensity))
+                VehicleModulesPlugin.Instance.StartCoroutine(FireRoutine(v, s));
 
-            // Задымление (Кислород)
-            if (!state.IsSmoking && roll < (cfg.ChanceSmoke + intensity))
-            {
-                VehicleModulesPlugin.Instance.StartCoroutine(SmokeRoutine(vehicle, state));
-            }
+            // ЗАДЫМЛЕНИЕ (Эффект ID 134 — Густая копоть)
+            if (!s.IsSmoking && roll < (cfg.ChanceSmoke + intensity))
+                VehicleModulesPlugin.Instance.StartCoroutine(SmokeRoutine(v, s));
 
-            // Оглушение
-            if (!state.IsStunned && roll < (cfg.ChanceStun + intensity))
-            {
-                VehicleModulesPlugin.Instance.StartCoroutine(StunRoutine(vehicle, state));
-            }
+            // ОГЛУШЕНИЕ (Блокировка управления + Курсор)
+            if (!s.IsStunned && roll < (cfg.ChanceStun + intensity))
+                VehicleModulesPlugin.Instance.StartCoroutine(StunRoutine(v, s));
         }
 
-        // --- КОРУТИНЫ ЭФФЕКТОВ ---
+        // --- ПРОФЕССИОНАЛЬНАЯ РЕАЛИЗАЦИЯ ЭФФЕКТОВ ---
 
-        private static IEnumerator FuelLeakRoutine(InteractableVehicle v, VehicleState s)
+        private static IEnumerator StunRoutine(InteractableVehicle v, VehicleState s)
         {
-            while (s.IsFuelTankBroken && v != null && !v.isExploded && v.fuel > 0)
+            s.IsStunned = true;
+            Send(v, "ЭКИПАЖ КОНТУЖЕН! Управление потеряно.", Color.yellow);
+
+            // Блокируем ввод для каждого пассажира
+            foreach (var passenger in v.passengers)
             {
-                v.fuel = (ushort)Mathf.Max(0, v.fuel - 12);
+                if (passenger.player != null)
+                {
+                    // Включаем курсор и блокируем управление игрой (WASD, Мышь, Выстрел)
+                    passenger.player.player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, true);
+                }
+            }
+
+            // Танк мгновенно глохнет и останавливается
+            v.isEngineOn = false;
+            var rb = v.GetComponent<Rigidbody>();
+            if (rb != null) { rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero; }
+
+            yield return new WaitForSeconds(5.0f);
+
+            // Снимаем блокировку
+            foreach (var passenger in v.passengers)
+            {
+                if (passenger.player != null)
+                    passenger.player.player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
+            }
+
+            s.IsStunned = false;
+            Send(v, "Экипаж восстановил контроль.", Color.green);
+        }
+
+        private static IEnumerator SmokeRoutine(InteractableVehicle v, VehicleState s)
+        {
+            s.IsSmoking = true;
+            Send(v, "В ОТСЕКЕ ДЫМ! Экипаж задыхается.", Color.gray);
+
+            while (s.IsSmoking && v != null && !v.isExploded)
+            {
+                // Посылаем густой черный дым (ID 134)
+                EffectManager.sendEffect(134, 128, v.transform.position);
+
+                foreach (var passenger in v.passengers)
+                {
+                    if (passenger.player != null)
+                        // 15% урона по кислороду каждую секунду
+                        passenger.player.player.life.askSuffocate(15);
+                }
                 yield return new WaitForSeconds(1.0f);
-            }
-        }
-
-        private static IEnumerator TransmissionFailureRoutine(InteractableVehicle v, VehicleState s)
-        {
-            yield return new WaitForSeconds(Random.Range(15, 30));
-            if (v != null && !v.isExploded)
-            {
-                v.batteryCharge = 0;
-                SendMessage(v, "ТРАНСМИССИЯ: Аккумулятор полностью разряжен.", Color.red);
             }
         }
 
         private static IEnumerator FireRoutine(InteractableVehicle v, VehicleState s)
         {
             s.IsOnFire = true;
-            SendMessage(v, "ПОЖАР! Техника взорвется через несколько секунд!", Color.red);
-            float timer = Random.Range(6, 8);
-            while (timer > 0 && v != null && !v.isExploded)
+            float lifeTime = Random.Range(6, 8);
+            
+            while (lifeTime > 0 && v != null && !v.isExploded)
             {
-                EffectManager.sendEffect(125, 128, v.transform.position); // Эффект огня
+                // Посылаем эффект огня (ID 125)
+                EffectManager.sendEffect(125, 128, v.transform.position);
+                
+                // Наносим урон самой технике (быстрая смерть танка)
                 VehicleManager.damage(v, 150, 1, false);
-                timer -= 1.5f;
-                yield return new WaitForSeconds(1.5f);
+                lifeTime -= 1.0f;
+                yield return new WaitForSeconds(1.0f);
             }
             s.IsOnFire = false;
         }
 
-        private static IEnumerator SmokeRoutine(InteractableVehicle v, VehicleState s)
+        private static void ExplodeBreach(InteractableVehicle v)
         {
-            s.IsSmoking = true;
-            SendMessage(v, "ЗАДЫМЛЕНИЕ: Экипаж задыхается!", Color.gray);
-            float duration = Random.Range(15, 30);
-            while (duration > 0 && v != null && !v.isExploded)
+            Send(v, "КАТАСТРОФА: Разрыв казенника внутри башни!", Color.red);
+            // Эффект крупного взрыва (ID 45)
+            EffectManager.sendEffect(45, 128, v.transform.position);
+            
+            // Наносим огромный урон и убиваем/раним экипаж
+            VehicleManager.damage(v, 800, 1, false);
+            foreach (var p in v.passengers)
             {
-                EffectManager.sendEffect(134, 128, v.transform.position); // Эффект дыма
-                foreach (var passenger in v.passengers)
-                {
-                    if (passenger.player != null)
-                        passenger.player.player.life.askSuffocate(10); // Урон по кислороду
-                }
-                duration -= 2f;
-                yield return new WaitForSeconds(2.0f);
+                if (p.player != null)
+                    p.player.player.life.askDamage(90, Vector3.up, EDeathCause.CHARGE, ELimb.SPINE, v.instanceID, out EPlayerKill kill);
             }
-            s.IsSmoking = false;
         }
 
-        private static IEnumerator StunRoutine(InteractableVehicle v, VehicleState s)
+        private static IEnumerator FuelRoutine(InteractableVehicle v, VehicleState s)
         {
-            s.IsStunned = true;
-            SendMessage(v, "ЭКИПАЖ ОГЛУШЕН! Управление заблокировано.", Color.yellow);
-            yield return new WaitForSeconds(Random.Range(4, 5));
-            s.IsStunned = false;
-            SendMessage(v, "Экипаж пришел в себя.", Color.green);
+            while (s.IsFuelTankBroken && v != null && !v.isExploded && v.fuel > 0)
+            {
+                v.fuel = (ushort)Mathf.Max(0, v.fuel - 25);
+                yield return new WaitForSeconds(1.0f);
+            }
         }
 
-        private static void SendMessage(InteractableVehicle v, string msg, Color c)
+        private static IEnumerator TransRoutine(InteractableVehicle v, VehicleState s)
+        {
+            yield return new WaitForSeconds(Random.Range(15, 30));
+            if (v != null) { v.batteryCharge = 0; Send(v, "Электрика танка сгорела.", Color.red); }
+        }
+
+        private static void Send(InteractableVehicle v, string msg, Color c)
         {
             foreach (var p in v.passengers)
                 if (p.player != null) UnturnedChat.Say(p.player.playerID.steamID, msg, c);
-        }
-
-        private static void ExplodeInternally(InteractableVehicle v)
-        {
-            EffectManager.sendEffect(45, 128, v.transform.position); // Большой взрыв
         }
     }
 }
