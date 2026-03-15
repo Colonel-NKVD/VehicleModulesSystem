@@ -21,12 +21,14 @@ namespace VehicleModulesSystem
         public bool IsOnFire;
         public bool IsSmoking;
         public bool IsStunned;
-        public bool IsRepairing;
+        public bool IsRepairing; // Флаг для системы починки
     }
 
     public class VehicleModulesPlugin : RocketPlugin<VehicleModulesConfig> 
     {
         public static VehicleModulesPlugin Instance;
+        
+        // Основной словарь отслеживания техники
         public Dictionary<uint, VehicleState> TrackedVehicles = new Dictionary<uint, VehicleState>();
 
         protected override void Load()
@@ -36,7 +38,7 @@ namespace VehicleModulesSystem
             
             Rocket.Core.Logging.Logger.Log("================================================");
             Rocket.Core.Logging.Logger.Log("--- [OBSERVER] Система мониторинга запущена ---");
-            Rocket.Core.Logging.Logger.Log("--- Режим: Выборочный (Фильтр по ID активен) ---");
+            Rocket.Core.Logging.Logger.Log("--- Протокол: Дизельпанк / Grimdark 1917+ ---");
             Rocket.Core.Logging.Logger.Log("================================================");
             
             StartCoroutine(VehicleHealthWatcher());
@@ -50,14 +52,17 @@ namespace VehicleModulesSystem
             Rocket.Core.Logging.Logger.Log("[OBSERVER] Система аварийно остановлена.");
         }
 
+        // Публичный метод для получения состояния техники (используется в командах)
         public VehicleState GetVehicleState(InteractableVehicle v)
         {
             if (v == null) return null;
+            
             if (!TrackedVehicles.TryGetValue(v.instanceID, out VehicleState state))
             {
                 state = new VehicleState { InstanceID = v.instanceID, LastHealth = v.health };
                 TrackedVehicles.Add(v.instanceID, state);
             }
+            
             return state;
         }
 
@@ -66,6 +71,7 @@ namespace VehicleModulesSystem
             if (player != null && player.Player != null)
             {
                 player.Player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
+                Rocket.Core.Logging.Logger.Log($"[STUN_FIX] Сброшен Modal для игрока: {player.CharacterName}");
             }
         }
 
@@ -79,33 +85,38 @@ namespace VehicleModulesSystem
                 for (int i = VehicleManager.vehicles.Count - 1; i >= 0; i--)
                 {
                     var vehicle = VehicleManager.vehicles[i];
-                    
-                    // --- ФИЛЬТР ПО ID ---
-                    // Если ID машины не прописан в конфиге, мы её полностью игнорируем
-                    if (vehicle == null || vehicle.isExploded || !Configuration.Instance.AllowedVehicleIds.Contains(vehicle.id)) 
+                    if (vehicle == null || vehicle.isExploded) 
                     {
                         if (vehicle != null && TrackedVehicles.ContainsKey(vehicle.instanceID))
                             TrackedVehicles.Remove(vehicle.instanceID);
                         continue;
                     }
 
+                    // Используем наш метод для получения или создания состояния
                     VehicleState state = GetVehicleState(vehicle);
 
+                    // --- РАСШИРЕННЫЙ ДАТЧИК УРОНА ---
                     if (vehicle.health < state.LastHealth)
                     {
                         int damageTaken = state.LastHealth - vehicle.health;
+                        Rocket.Core.Logging.Logger.Log($"[DAMAGE_EVENT] {vehicle.asset.vehicleName} получил {damageTaken} урона. (Остаток: {vehicle.health})");
+                        
                         ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона! Состояние: {vehicle.health}/{vehicle.asset.health}", Color.yellow);
+                        
                         ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
                     }
+                    else if (vehicle.health > state.LastHealth)
+                    {
+                        Rocket.Core.Logging.Logger.Log($"[REPAIR_EVENT] {vehicle.asset.vehicleName} восстановлен: {state.LastHealth} -> {vehicle.health}");
+                    }
 
-                    // Остановка танка при контузии
+                    // --- ПОДАВЛЕНИЕ СИСТЕМ ---
                     if (state.IsStunned)
                     {
                         var rb = vehicle.GetComponent<Rigidbody>();
                         if (rb != null) { rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero; }
                     }
 
-                    // Поломка трансмиссии
                     if (state.IsTransmissionBroken && vehicle.batteryCharge > 0)
                     {
                         vehicle.batteryCharge = 0;
