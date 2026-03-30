@@ -1,28 +1,29 @@
-using HarmonyLib;
-using SDG.Unturned;
-using Steamworks;
+// ... (начало кода такое же)
 
-namespace VehicleModulesSystem
-{
-    // Перехватываем метод запуска двигателя
-    [HarmonyPatch(typeof(InteractableVehicle), "askEngine")]
-    public class TransmissionPatch
-    {
-        [HarmonyPrefix]
-        public static bool Prefix(InteractableVehicle __instance, CSteamID steamID, ref bool state)
-        {
-            // Разрешаем заглушить двигатель в любом случае
-            if (!state) return true; 
+                    // БЛОКИРОВКА ХОДА (ОБНОВЛЕНО)
+                    if (state.IsTransmissionBroken)
+                    {
+                        // Вместо askEngine используем "дизельный костыль": 
+                        // обнуляем аккумулятор. В Unturned без него машина не заведется, 
+                        // даже если Harmony по какой-то причине пропустит пакет.
+                        if (vehicle.batteryCharge > 0)
+                        {
+                            vehicle.batteryCharge = 0;
+                            VehicleManager.sendVehicleFuel(vehicle, vehicle.fuel);
+                        }
+                        
+                        // Если танк все еще катится по инерции, гасим скорость (имитируем заклинившую коробку)
+                        var rb = vehicle.GetComponent<Rigidbody>();
+                        if (rb != null && rb.velocity.magnitude > 0.1f)
+                        {
+                            rb.velocity = Vector3.Lerp(rb.velocity, Vector3.zero, Time.deltaTime * 2f);
+                        }
+                    }
 
-            var vState = VehicleModulesPlugin.Instance.GetVehicleState(__instance);
-            
-            // Если трансмиссия сломана — блокируем попытку завестись
-            if (vState != null && vState.IsTransmissionBroken)
-            {
-                return false; 
+                    state.LastHealth = vehicle.health;
+                }
+                yield return new WaitForSeconds(0.5f);
             }
-            
-            return true;
         }
     }
 }
