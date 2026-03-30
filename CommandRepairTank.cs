@@ -4,6 +4,7 @@ using Rocket.Unturned.Chat;
 using SDG.Unturned;
 using System.Collections.Generic;
 using UnityEngine;
+using System.Collections;
 
 namespace VehicleModulesSystem
 {
@@ -27,7 +28,6 @@ namespace VehicleModulesSystem
                 return;
             }
 
-            // Получаем состояние танка из твоего главного плагина
             VehicleState state = VehicleModulesPlugin.Instance.GetVehicleState(v);
             if (state == null) return;
 
@@ -37,18 +37,84 @@ namespace VehicleModulesSystem
                 return;
             }
 
-            // Значения ID баррикады и радиуса желательно вынести в твой Config
-            ushort repairStationId = 287; // ЗАМЕНИ НА ID ТВОЕЙ БАРРИКАДЫ СТАНЦИИ
-            float repairRadius = 15.0f; // Радиус ауры починки
+            ushort repairStationId = VehicleModulesPlugin.Instance.Configuration.Instance.RepairStationId;
+            float repairRadius = 15.0f; 
 
-            if (!ModuleDamageHandler.IsNearRepairStation(v.transform.position, repairStationId, repairRadius))
+            if (!IsNearRepairStation(v.transform.position, repairStationId, repairRadius))
             {
                 UnturnedChat.Say(caller, "Поблизости нет инженерной станции для починки!", Color.red);
                 return;
             }
 
-            // Запускаем корутину починки
-            VehicleModulesPlugin.Instance.StartCoroutine(ModuleDamageHandler.RepairRoutine(v, state, repairStationId, repairRadius));
+            VehicleModulesPlugin.Instance.StartCoroutine(RepairRoutine(v, state, repairStationId, repairRadius));
+        }
+
+        private IEnumerator RepairRoutine(InteractableVehicle v, VehicleState s, ushort stationId, float radius)
+        {
+            s.IsRepairing = true;
+            ModuleDamageHandler.SendChat(v, ">> ИНИЦИИРОВАН ПОЛЕВОЙ РЕМОНТ. НЕ ПОКИДАЙТЕ ЗОНУ 35 СЕКУНД <<", Color.cyan);
+            
+            int repairTime = 35;
+            
+            for (int i = 0; i < repairTime; i++)
+            {
+                if (v == null || v.isExploded) 
+                {
+                    if (s != null) s.IsRepairing = false;
+                    yield break;
+                }
+
+                if (!IsNearRepairStation(v.transform.position, stationId, radius))
+                {
+                    ModuleDamageHandler.SendChat(v, "!!! РЕМОНТ ПРЕРВАН: Техника покинула зону обслуживания !!!", Color.red);
+                    s.IsRepairing = false;
+                    yield break;
+                }
+
+                if (i > 0 && i % 10 == 0) 
+                {
+                    ModuleDamageHandler.SendChat(v, $"... Восстановление систем: осталось {repairTime - i} сек ...", Color.gray);
+                }
+
+                yield return new WaitForSeconds(1.0f);
+            }
+
+            v.askRepair(v.asset.health); 
+            v.batteryCharge = 10000; // Восстанавливаем аккумулятор, чтобы починенная трансмиссия заработала
+            VehicleManager.sendVehicleHealth(v, v.health); 
+            VehicleManager.sendVehicleFuel(v, v.fuel);
+            
+            s.IsFuelTankBroken = false;
+            s.IsTransmissionBroken = false; // Починка трансмиссии
+            s.IsGunBroken = false;
+            s.IsOnFire = false;
+            s.IsSmoking = false;
+            s.IsStunned = false;
+            s.IsRepairing = false;
+            
+            ModuleDamageHandler.SendChat(v, ">> ТЕХНИКА ПОЛНОСТЬЮ ВОССТАНОВЛЕНА. ГОТОВНОСТЬ К БОЮ 100% <<", Color.green);
+        }
+
+        private bool IsNearRepairStation(Vector3 position, ushort targetId, float radius)
+        {
+            float sqrRadius = radius * radius;
+            for (byte x = 0; x < Regions.WORLD_SIZE; x++)
+            {
+                for (byte y = 0; y < Regions.WORLD_SIZE; y++)
+                {
+                    if (BarricadeManager.regions[x, y] != null)
+                    {
+                        foreach (BarricadeDrop drop in BarricadeManager.regions[x, y].drops)
+                        {
+                            if (drop.asset.id == targetId && (drop.model.position - position).sqrMagnitude <= sqrRadius)
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
         }
     }
 }
