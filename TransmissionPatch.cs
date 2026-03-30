@@ -1,29 +1,32 @@
-// ... (начало кода такое же)
+using HarmonyLib;
+using SDG.Unturned;
+using Steamworks;
 
-                    // БЛОКИРОВКА ХОДА (ОБНОВЛЕНО)
-                    if (state.IsTransmissionBroken)
-                    {
-                        // Вместо askEngine используем "дизельный костыль": 
-                        // обнуляем аккумулятор. В Unturned без него машина не заведется, 
-                        // даже если Harmony по какой-то причине пропустит пакет.
-                        if (vehicle.batteryCharge > 0)
-                        {
-                            vehicle.batteryCharge = 0;
-                            VehicleManager.sendVehicleFuel(vehicle, vehicle.fuel);
-                        }
-                        
-                        // Если танк все еще катится по инерции, гасим скорость (имитируем заклинившую коробку)
-                        var rb = vehicle.GetComponent<Rigidbody>();
-                        if (rb != null && rb.velocity.magnitude > 0.1f)
-                        {
-                            rb.velocity = Vector3.Lerp(rb.velocity, Vector3.zero, Time.deltaTime * 2f);
-                        }
-                    }
-
-                    state.LastHealth = vehicle.health;
-                }
-                yield return new WaitForSeconds(0.5f);
+namespace VehicleModulesSystem
+{
+    /// <summary>
+    /// Патч для блокировки движения техники при сломанной трансмиссии.
+    /// Перехватывает ввод игрока (W, A, S, D).
+    /// </summary>
+    [HarmonyPatch(typeof(InteractableVehicle), "tellDrive")]
+    public class TransmissionPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(InteractableVehicle __instance, CSteamID steamID, byte x, byte y, ushort steering, ushort speed)
+        {
+            // Получаем состояние текущей машины через главный класс плагина
+            var state = VehicleModulesPlugin.Instance.GetVehicleState(__instance);
+            
+            if (state != null && state.IsTransmissionBroken)
+            {
+                // Если трансмиссия сломана, возвращаем false.
+                // Это заставляет сервер игнорировать пакет управления от игрока.
+                // Машина будет стоять на месте, даже если игрок жмет "W".
+                return false;
             }
+            
+            // Если всё в порядке, разрешаем стандартное выполнение метода
+            return true;
         }
     }
 }
