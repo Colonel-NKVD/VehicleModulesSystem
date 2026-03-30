@@ -8,33 +8,28 @@ using Rocket.Unturned.Events;
 using Rocket.Unturned.Player;
 using SDG.Unturned;
 using UnityEngine;
+using HarmonyLib;
+using Steamworks;
 
 namespace VehicleModulesSystem
 {
-    public class VehicleState
-    {
-        public ushort LastHealth;
-        public uint InstanceID;
-        public bool IsFuelTankBroken;
-        public bool IsTransmissionBroken;
-        public bool IsGunBroken;
-        public bool IsOnFire;
-        public bool IsSmoking;
-        public bool IsStunned;
-        public bool IsRepairing;
-    }
-
     public class VehicleModulesPlugin : RocketPlugin<VehicleModulesConfig> 
     {
         public static VehicleModulesPlugin Instance;
         public Dictionary<uint, VehicleState> TrackedVehicles = new Dictionary<uint, VehicleState>();
+        
+        public const string HarmonyInstanceId = "com.ironandmud.vehiclemodules";
+        private Harmony harmony;
 
         protected override void Load()
         {
             Instance = this;
+            
+            harmony = new Harmony(HarmonyInstanceId);
+            harmony.PatchAll();
+
             UnturnedPlayerEvents.OnPlayerDeath += OnPlayerDeath;
             
-            // Проверка на случай, если конфиг не загрузился корректно
             if (Configuration.Instance.AllowedVehicleIds == null)
             {
                 Configuration.Instance.AllowedVehicleIds = new List<ushort>();
@@ -42,7 +37,7 @@ namespace VehicleModulesSystem
             
             Rocket.Core.Logging.Logger.Log("================================================");
             Rocket.Core.Logging.Logger.Log("--- [OBSERVER] Система мониторинга запущена ---");
-            Rocket.Core.Logging.Logger.Log("--- Протокол: Дизельпанк / Grimdark 1917+ ---");
+            Rocket.Core.Logging.Logger.Log("--- [HARMONY] Патчи ядра применены ---");
             Rocket.Core.Logging.Logger.Log("================================================");
             
             StartCoroutine(VehicleHealthWatcher());
@@ -50,6 +45,7 @@ namespace VehicleModulesSystem
 
         protected override void Unload()
         {
+            harmony.UnpatchAll(HarmonyInstanceId);
             UnturnedPlayerEvents.OnPlayerDeath -= OnPlayerDeath;
             StopAllCoroutines();
             TrackedVehicles.Clear();
@@ -67,11 +63,37 @@ namespace VehicleModulesSystem
             return state;
         }
 
-        private void OnPlayerDeath(UnturnedPlayer player, EDeathCause cause, ELimb limb, Steamworks.CSteamID murderer)
+        private void OnPlayerDeath(UnturnedPlayer player, EDeathCause cause, ELimb limb, CSteamID murderer)
         {
             if (player != null && player.Player != null)
             {
                 player.Player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
+            }
+        }
+
+        public IEnumerator BandageRoutine(UnturnedPlayer player, ushort bandageId)
+        {
+            float waitTime = Configuration.Instance.BandageUseTimeSeconds;
+            yield return new WaitForSeconds(waitTime);
+
+            if (player == null || player.Dead || !player.IsInVehicle)
+            {
+                UnturnedChat.Say(player, "Перевязка прервана!", Color.red);
+                yield break;
+            }
+
+            var items = player.Inventory.search(bandageId, true, true);
+            if (items.Count > 0)
+            {
+                player.Inventory.removeItem(items[0].page, player.Inventory.getIndex(items[0].page, items[0].jar.x, items[0].jar.y));
+                
+                byte healAmount = Configuration.Instance.BandageHealAmount;
+                player.Player.life.askHeal(healAmount, true, true);
+                UnturnedChat.Say(player, "Вы успешно перевязали раны.", Color.green);
+            }
+            else
+            {
+                UnturnedChat.Say(player, "Бинт пропал из инвентаря!", Color.red);
             }
         }
 
@@ -82,14 +104,12 @@ namespace VehicleModulesSystem
             {
                 if (VehicleManager.vehicles == null) { yield return new WaitForSeconds(1.0f); continue; }
 
-                // Извлечение списка один раз за итерацию для безопасности
                 var allowedIds = Configuration.Instance?.AllowedVehicleIds;
 
                 for (int i = VehicleManager.vehicles.Count - 1; i >= 0; i--)
                 {
                     var vehicle = VehicleManager.vehicles[i];
                     
-                    // Улучшенная проверка: игнорируем, если машины нет, она взорвана или её ID нет в списке
                     if (vehicle == null || vehicle.isExploded || allowedIds == null || !allowedIds.Contains(vehicle.id)) 
                     {
                         if (vehicle != null && TrackedVehicles.ContainsKey(vehicle.instanceID))
@@ -102,8 +122,38 @@ namespace VehicleModulesSystem
                     if (vehicle.health < state.LastHealth)
                     {
                         int damageTaken = state.LastHealth - vehicle.health;
-                        ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона! Состояние: {vehicle.health}/{vehicle.asset.health}", Color.yellow);
-                        ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
+                        int maxHealth = vehicle.asset.health;
+
+                        // --- МЕХАНИКА НЕПРОБИТИЯ (РИКОШЕТ) ---
+                        // Если урон меньше 20% от макс. ХП и прокнул шанс на аннулирование
+                        if (damageTaken < (maxHealth * 0.20f) && UnityEngine.Random.value < Configuration.Instance.ChanceDeflect)
+                        {
+                            ModuleDamageHandler.SendChat(vehicle, $"[БРОНЯ] Непробитие! Попадание ({damageTaken} ед.) прошло по касательной.", Color.green);
+                            
+                            // Аннулируем урон: моментально лечим технику на количество полученного урона
+                            vehicle.askRepair((ushort)damageTaken);
+                            VehicleManager.sendVehicleHealth(vehicle, vehicle.health);
+                            
+                            state.LastHealth = vehicle.health; // Обновляем состояние, чтобы датчик не сработал снова
+                            continue; // Пропускаем проверки на критические модули
+                        }
+
+                        // --- ОБРАБОТКА ПРОБИТИЯ ---
+                        if (damageTaken >= Configuration.Instance.MinDamageForCrit)
+                        {
+                            ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона! Состояние: {vehicle.health}/{maxHealth}", Color.yellow);
+                            ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
+                        }
+                    }
+                    // Сброс статусов при починке техники на ремстанции или игроками
+                    else if (vehicle.health > state.LastHealth)
+                    {
+                        state.IsTransmissionBroken = false;
+                        state.IsFuelTankBroken = false;
+                        state.IsGunBroken = false;
+                        state.IsOnFire = false;
+                        state.IsSmoking = false;
+                        state.IsStunned = false;
                     }
 
                     if (state.IsStunned)
@@ -116,10 +166,17 @@ namespace VehicleModulesSystem
                         }
                     }
 
-                    if (state.IsTransmissionBroken && vehicle.batteryCharge > 0)
+                    if (state.IsTransmissionBroken)
                     {
-                        vehicle.batteryCharge = 0;
-                        VehicleManager.sendVehicleFuel(vehicle, vehicle.fuel);
+                        if (vehicle.isEngineOn)
+                        {
+                            vehicle.askEngine(CSteamID.Nil, false);
+                        }
+                        if (vehicle.batteryCharge > 0)
+                        {
+                            vehicle.batteryCharge = 0;
+                            VehicleManager.sendVehicleFuel(vehicle, vehicle.fuel);
+                        }
                     }
 
                     state.LastHealth = vehicle.health;
