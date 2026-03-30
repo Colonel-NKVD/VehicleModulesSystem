@@ -17,6 +17,10 @@
       <HintPath>Libraries\Rocket.Core.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>Libraries\0Harmony.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
     <Reference Include="Rocket.Unturned">
       <HintPath>Libraries\Rocket.Unturned.dll</HintPath>
       <Private>false</Private>
