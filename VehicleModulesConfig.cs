@@ -6,11 +6,25 @@ namespace VehicleModulesSystem
 {
     public class VehicleModulesConfig : IRocketPluginConfiguration
     {
-        // Атрибут XmlArrayItem делает конфиг читаемым: <VehicleID>120</VehicleID>
         [XmlArrayItem(ElementName = "VehicleID")]
-        public List<ushort> AllowedVehicleIds;
-        
-        // Шансы критических повреждений (0.0 - 1.0)
+        public List<ushort> AllowedVehicleIds = new List<ushort>();
+
+        // Настройки ремстанции
+        public ushort RepairStationId;
+
+        // Настройки урона и брони
+        public int MinDamageForCrit;
+        public float ChanceDeflect; // Шанс аннулировать урон < 20% от макс. ХП
+
+        // Настройки бинта
+        public ushort BandageItemId;
+        public float BandageUseTimeSeconds;
+        public byte BandageHealAmount;
+
+        // Настройки эффектов
+        public ushort SmokeVisualEffectId;
+
+        // Шансы (0.0 - 1.0)
         public float ChanceFuelLeak;
         public float ChanceTransmission;
         public float ChanceGunBroken;
@@ -18,12 +32,20 @@ namespace VehicleModulesSystem
         public float ChanceSmoke;
         public float ChanceStun;
 
-        // Метод LoadDefaults вызывается RocketMod при первом запуске
         public void LoadDefaults()
         {
-            // Стартовый набор техники для твоего проекта
             AllowedVehicleIds = new List<ushort> { 120, 121, 137 };
             
+            RepairStationId = 137; 
+            MinDamageForCrit = 15; 
+            ChanceDeflect = 0.35f; // 35% шанс, что мелкий калибр не пробьет броню
+            
+            BandageItemId = 393; 
+            BandageUseTimeSeconds = 4.0f; 
+            BandageHealAmount = 20; 
+            
+            SmokeVisualEffectId = 110; 
+
             ChanceFuelLeak = 0.15f;
             ChanceTransmission = 0.10f;
             ChanceGunBroken = 0.12f;
