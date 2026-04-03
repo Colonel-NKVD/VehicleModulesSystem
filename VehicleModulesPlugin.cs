@@ -25,16 +25,28 @@ namespace VehicleModulesSystem
         {
             Instance = this;
             
-            // Инициализация Harmony патчей
+            // Инициализация Harmony патчей с проверкой метода
             try 
             {
                 harmony = new Harmony(HarmonyInstanceId);
-                harmony.PatchAll();
-                Rocket.Core.Logging.Logger.Log("--- [HARMONY] Ядерные патчи успешно применены ---");
+                
+                // Явный поиск метода tellDrive с указанием типов аргументов для 2026 года
+                var target = AccessTools.Method(typeof(InteractableVehicle), "tellDrive", 
+                    new Type[] { typeof(CSteamID), typeof(byte), typeof(byte), typeof(ushort), typeof(ushort) });
+                
+                if (target == null)
+                {
+                    Rocket.Core.Logging.Logger.Log("!!! КРИТИЧЕСКАЯ ОШИБКА: Метод tellDrive не найден в Assembly-CSharp. Патч трансмиссии невозможен!");
+                }
+                else
+                {
+                    harmony.PatchAll();
+                    Rocket.Core.Logging.Logger.Log("--- [HARMONY] Все системы синхронизированы. Патчи активны ---");
+                }
             }
             catch (Exception e) 
             {
-                Rocket.Core.Logging.Logger.Log("--- [HARMONY] КРИТИЧЕСКАЯ ОШИБКА: " + e.Message);
+                Rocket.Core.Logging.Logger.Log("--- [HARMONY] КРИТИЧЕСКАЯ ОШИБКА ЗАГРУЗКИ: " + e.Message);
             }
 
             UnturnedPlayerEvents.OnPlayerDeath += OnPlayerDeath;
@@ -48,7 +60,7 @@ namespace VehicleModulesSystem
 
         protected override void Unload()
         {
-            // Важно: снимаем патчи при выгрузке, чтобы не крашнуть сервер
+            // Снимаем патчи при выгрузке
             if (harmony != null)
             {
                 harmony.UnpatchAll(HarmonyInstanceId);
@@ -135,7 +147,6 @@ namespace VehicleModulesSystem
                     }
                     else if (vehicle.health > state.LastHealth)
                     {
-                        // Сброс состояний при полном лечении (например, на ремстанции)
                         if (vehicle.health == vehicle.asset.health)
                         {
                             state.IsTransmissionBroken = false;
@@ -158,7 +169,7 @@ namespace VehicleModulesSystem
                         }
                     }
 
-                    // Обработка сломанной трансмиссии (слив батареи для невозможности старта)
+                    // Обработка сломанной трансмиссии
                     if (state.IsTransmissionBroken)
                     {
                         if (vehicle.batteryCharge > 0)
