@@ -1,31 +1,38 @@
 using HarmonyLib;
 using SDG.Unturned;
 using Steamworks;
+using System;
 
 namespace VehicleModulesSystem
 {
-    /// <summary>
-    /// Патч для блокировки движения техники при сломанной трансмиссии.
-    /// Перехватывает ввод игрока (W, A, S, D).
-    /// </summary>
-    [HarmonyPatch(typeof(InteractableVehicle), "tellDrive")]
+    // Мы явно указываем типы параметров метода tellDrive, чтобы Harmony его нашел
+    [HarmonyPatch(typeof(InteractableVehicle))]
+    [HarmonyPatch("tellDrive")]
+    [HarmonyPatch(new Type[] { typeof(CSteamID), typeof(byte), typeof(byte), typeof(ushort), typeof(ushort) })]
     public class TransmissionPatch
     {
         [HarmonyPrefix]
         public static bool Prefix(InteractableVehicle __instance, CSteamID steamID, byte x, byte y, ushort steering, ushort speed)
         {
-            // Получаем состояние текущей машины через главный класс плагина
-            var state = VehicleModulesPlugin.Instance.GetVehicleState(__instance);
-            
-            if (state != null && state.IsTransmissionBroken)
+            try
             {
-                // Если трансмиссия сломана, возвращаем false.
-                // Это заставляет сервер игнорировать пакет управления от игрока.
-                // Машина будет стоять на месте, даже если игрок жмет "W".
-                return false;
+                // Проверка на null самого плагина, чтобы не вылетало при запуске
+                if (VehicleModulesPlugin.Instance == null) return true;
+
+                var state = VehicleModulesPlugin.Instance.GetVehicleState(__instance);
+                
+                if (state != null && state.IsTransmissionBroken)
+                {
+                    // Если трансмиссия сломана — игнорируем ввод (машина не поедет)
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                // Если что-то пошло не так внутри патча, просто логируем и не вешаем сервер
+                Rocket.Core.Logging.Logger.Log("Error in TransmissionPatch: " + ex.Message);
             }
             
-            // Если всё в порядке, разрешаем стандартное выполнение метода
             return true;
         }
     }
