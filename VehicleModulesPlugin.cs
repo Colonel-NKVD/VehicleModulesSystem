@@ -8,7 +8,6 @@ using Rocket.Unturned.Events;
 using Rocket.Unturned.Player;
 using SDG.Unturned;
 using UnityEngine;
-using HarmonyLib;
 using Steamworks;
 
 namespace VehicleModulesSystem
@@ -17,42 +16,15 @@ namespace VehicleModulesSystem
     {
         public static VehicleModulesPlugin Instance;
         public Dictionary<uint, VehicleState> TrackedVehicles = new Dictionary<uint, VehicleState>();
-        
-        public const string HarmonyInstanceId = "com.ironandmud.vehiclemodules";
-        private Harmony harmony;
 
         protected override void Load()
         {
             Instance = this;
-            
-            // Инициализация Harmony патчей с проверкой метода
-            try 
-            {
-                harmony = new Harmony(HarmonyInstanceId);
-                
-                // Явный поиск метода tellDrive с указанием типов аргументов для 2026 года
-                var target = AccessTools.Method(typeof(InteractableVehicle), "tellDrive", 
-                    new Type[] { typeof(CSteamID), typeof(byte), typeof(byte), typeof(ushort), typeof(ushort) });
-                
-                if (target == null)
-                {
-                    Rocket.Core.Logging.Logger.Log("!!! КРИТИЧЕСКАЯ ОШИБКА: Метод tellDrive не найден в Assembly-CSharp. Патч трансмиссии невозможен!");
-                }
-                else
-                {
-                    harmony.PatchAll();
-                    Rocket.Core.Logging.Logger.Log("--- [HARMONY] Все системы синхронизированы. Патчи активны ---");
-                }
-            }
-            catch (Exception e) 
-            {
-                Rocket.Core.Logging.Logger.Log("--- [HARMONY] КРИТИЧЕСКАЯ ОШИБКА ЗАГРУЗКИ: " + e.Message);
-            }
-
             UnturnedPlayerEvents.OnPlayerDeath += OnPlayerDeath;
             
             Rocket.Core.Logging.Logger.Log("================================================");
-            Rocket.Core.Logging.Logger.Log("--- [OBSERVER] Система мониторинга запущена ---");
+            Rocket.Core.Logging.Logger.Log("--- [VEHICLE MODULES] Легкий режим загружен ---");
+            Rocket.Core.Logging.Logger.Log("--- HARMONY ОТКЛЮЧЕН. Используется ванильное API ---");
             Rocket.Core.Logging.Logger.Log("================================================");
             
             StartCoroutine(VehicleHealthWatcher());
@@ -60,17 +32,10 @@ namespace VehicleModulesSystem
 
         protected override void Unload()
         {
-            // Снимаем патчи при выгрузке
-            if (harmony != null)
-            {
-                harmony.UnpatchAll(HarmonyInstanceId);
-            }
-
             UnturnedPlayerEvents.OnPlayerDeath -= OnPlayerDeath;
             StopAllCoroutines();
             TrackedVehicles.Clear();
-            
-            Rocket.Core.Logging.Logger.Log("[OBSERVER] Система мониторинга остановлена.");
+            Rocket.Core.Logging.Logger.Log("[VEHICLE MODULES] Выгружен.");
         }
 
         public VehicleState GetVehicleState(InteractableVehicle v)
@@ -119,7 +84,10 @@ namespace VehicleModulesSystem
                 for (int i = VehicleManager.vehicles.Count - 1; i >= 0; i--)
                 {
                     var vehicle = VehicleManager.vehicles[i];
-                    if (vehicle == null || vehicle.isExploded || !Configuration.Instance.AllowedVehicleIds.Contains(vehicle.id)) continue;
+                    
+                    // Если техника взорвана или её нет в списке AllowedVehicleIds - пропускаем
+                    if (vehicle == null || vehicle.isExploded || !Configuration.Instance.AllowedVehicleIds.Contains(vehicle.id)) 
+                        continue;
 
                     VehicleState state = GetVehicleState(vehicle);
 
@@ -128,25 +96,35 @@ namespace VehicleModulesSystem
                         int damageTaken = state.LastHealth - vehicle.health;
                         float maxHealth = vehicle.asset.health;
 
-                        // МЕХАНИКА НЕПРОБИТИЯ (Аннулирование урона < 20% макс ХП)
+                        // ДЕБАГ-ЛОГ (поможет нам понять, видит ли плагин урон вообще)
+                        Rocket.Core.Logging.Logger.Log($"[DEBUG] Техника {vehicle.id} получила урон: {damageTaken}. Порог для крита: {Configuration.Instance.MinDamageForCrit}");
+
+                        // ЛОГИКА РИКОШЕТА
                         if (damageTaken < (maxHealth * 0.20f) && UnityEngine.Random.value < Configuration.Instance.ChanceDeflect)
                         {
                             vehicle.askRepair((ushort)damageTaken);
                             VehicleManager.sendVehicleHealth(vehicle, vehicle.health);
                             ModuleDamageHandler.SendChat(vehicle, "РИКОШЕТ! Броня не пробита.", Color.green);
+                            Rocket.Core.Logging.Logger.Log($"[DEBUG] Сработал рикошет по {vehicle.id}.");
                             
                             state.LastHealth = vehicle.health;
                             continue;
                         }
 
-                        // ПРОВЕРКА НА КРИТЫ
+                        // ЛОГИКА КРИТОВ
                         if (damageTaken >= Configuration.Instance.MinDamageForCrit)
                         {
+                            ModuleDamageHandler.SendChat(vehicle, $"[ВНИМАНИЕ] Пробитие! Получено {damageTaken} ед. урона.", Color.yellow);
                             ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
+                        }
+                        else
+                        {
+                            Rocket.Core.Logging.Logger.Log($"[DEBUG] Урон {damageTaken} слишком мал для вызова крита (нужно >= {Configuration.Instance.MinDamageForCrit}).");
                         }
                     }
                     else if (vehicle.health > state.LastHealth)
                     {
+                        // Полная починка сбрасывает все поломки
                         if (vehicle.health == vehicle.asset.health)
                         {
                             state.IsTransmissionBroken = false;
@@ -158,29 +136,28 @@ namespace VehicleModulesSystem
                         }
                     }
 
-                    // Урон от задымления (1 хп/сек)
+                    // --- ПОСТОЯННЫЕ ЭФФЕКТЫ ---
+
+                    // Задымление
                     if (state.IsSmoking)
                     {
                         EffectManager.sendEffect(Configuration.Instance.SmokeVisualEffectId, 128, vehicle.transform.position + Vector3.up * 1.5f);
-                        foreach (var passenger in vehicle.passengers)
-                        {
-                            if (passenger.player != null)
-                                passenger.player.player.life.askDamage(1, Vector3.up, EDeathCause.BREATH, ELimb.SPINE, CSteamID.Nil, out _);
-                        }
                     }
 
-                    // Обработка сломанной трансмиссии
+                    // Трансмиссия: глушим движок и тормозим танк физически
                     if (state.IsTransmissionBroken)
                     {
                         if (vehicle.batteryCharge > 0)
                         {
-                            vehicle.batteryCharge = 0;
-                            VehicleManager.sendVehicleFuel(vehicle, vehicle.fuel);
+                            vehicle.batteryCharge = 0; // Садим аккум, чтобы нельзя было завестись
                         }
                         
+                        // Если танк катится — жестко гасим его скорость
                         var rb = vehicle.GetComponent<Rigidbody>();
-                        if (rb != null && rb.velocity.magnitude > 0.5f)
-                            rb.velocity = Vector3.Lerp(rb.velocity, Vector3.zero, Time.deltaTime);
+                        if (rb != null && rb.velocity.magnitude > 0.1f)
+                        {
+                            rb.velocity = Vector3.Lerp(rb.velocity, Vector3.zero, Time.deltaTime * 2f);
+                        }
                     }
 
                     state.LastHealth = vehicle.health;
