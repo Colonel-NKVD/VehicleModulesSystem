@@ -5,7 +5,7 @@ using System;
 
 namespace VehicleModulesSystem
 {
-    // Мы явно указываем типы параметров метода tellDrive, чтобы Harmony его нашел
+    // Явно указываем класс и метод, а также типы всех аргументов
     [HarmonyPatch(typeof(InteractableVehicle))]
     [HarmonyPatch("tellDrive")]
     [HarmonyPatch(new Type[] { typeof(CSteamID), typeof(byte), typeof(byte), typeof(ushort), typeof(ushort) })]
@@ -14,23 +14,23 @@ namespace VehicleModulesSystem
         [HarmonyPrefix]
         public static bool Prefix(InteractableVehicle __instance, CSteamID steamID, byte x, byte y, ushort steering, ushort speed)
         {
+            // Защита от ошибок при инициализации
+            if (VehicleModulesPlugin.Instance == null) return true;
+
             try
             {
-                // Проверка на null самого плагина, чтобы не вылетало при запуске
-                if (VehicleModulesPlugin.Instance == null) return true;
-
                 var state = VehicleModulesPlugin.Instance.GetVehicleState(__instance);
                 
+                // Если трансмиссия сломана — блокируем выполнение оригинального метода (машина не поедет)
                 if (state != null && state.IsTransmissionBroken)
                 {
-                    // Если трансмиссия сломана — игнорируем ввод (машина не поедет)
-                    return false;
+                    return false; 
                 }
             }
             catch (Exception ex)
             {
-                // Если что-то пошло не так внутри патча, просто логируем и не вешаем сервер
-                Rocket.Core.Logging.Logger.Log("Error in TransmissionPatch: " + ex.Message);
+                // Логируем ошибку, если что-то внутри пошло не так, но не даем серверу упасть
+                Rocket.Core.Logging.Logger.Log("Ошибка в патче Transmission: " + ex.Message);
             }
             
             return true;
