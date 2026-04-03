@@ -13,19 +13,6 @@ using Steamworks;
 
 namespace VehicleModulesSystem
 {
-    public class VehicleState
-    {
-        public ushort LastHealth;
-        public uint InstanceID;
-        public bool IsFuelTankBroken;
-        public bool IsTransmissionBroken;
-        public bool IsGunBroken;
-        public bool IsOnFire;
-        public bool IsSmoking;
-        public bool IsStunned;
-        public bool IsRepairing;
-    }
-
     public class VehicleModulesPlugin : RocketPlugin<VehicleModulesConfig> 
     {
         public static VehicleModulesPlugin Instance;
@@ -38,16 +25,16 @@ namespace VehicleModulesSystem
         {
             Instance = this;
             
-            // Инициализация Harmony
+            // Инициализация Harmony патчей
             try 
             {
                 harmony = new Harmony(HarmonyInstanceId);
                 harmony.PatchAll();
-                Rocket.Core.Logging.Logger.Log("--- [HARMONY] Патчи успешно применены ---");
+                Rocket.Core.Logging.Logger.Log("--- [HARMONY] Ядерные патчи успешно применены ---");
             }
             catch (Exception e) 
             {
-                Rocket.Core.Logging.Logger.Log("--- [HARMONY] ОШИБКА: " + e.Message);
+                Rocket.Core.Logging.Logger.Log("--- [HARMONY] КРИТИЧЕСКАЯ ОШИБКА: " + e.Message);
             }
 
             UnturnedPlayerEvents.OnPlayerDeath += OnPlayerDeath;
@@ -61,11 +48,17 @@ namespace VehicleModulesSystem
 
         protected override void Unload()
         {
-            harmony?.UnpatchAll(HarmonyInstanceId);
+            // Важно: снимаем патчи при выгрузке, чтобы не крашнуть сервер
+            if (harmony != null)
+            {
+                harmony.UnpatchAll(HarmonyInstanceId);
+            }
+
             UnturnedPlayerEvents.OnPlayerDeath -= OnPlayerDeath;
             StopAllCoroutines();
             TrackedVehicles.Clear();
-            Rocket.Core.Logging.Logger.Log("[OBSERVER] Система остановлена.");
+            
+            Rocket.Core.Logging.Logger.Log("[OBSERVER] Система мониторинга остановлена.");
         }
 
         public VehicleState GetVehicleState(InteractableVehicle v)
@@ -85,7 +78,6 @@ namespace VehicleModulesSystem
                 player.Player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
         }
 
-        // КОРУТИНА БИНТОВАНИЯ (Команда /b)
         public IEnumerator BandageRoutine(UnturnedPlayer player, ushort bandageId)
         {
             yield return new WaitForSeconds(Configuration.Instance.BandageUseTimeSeconds);
@@ -119,41 +111,43 @@ namespace VehicleModulesSystem
 
                     VehicleState state = GetVehicleState(vehicle);
 
-                    // --- ЛОГИКА УРОНА ---
                     if (vehicle.health < state.LastHealth)
                     {
                         int damageTaken = state.LastHealth - vehicle.health;
                         float maxHealth = vehicle.asset.health;
 
-                        // 1. Механика непробития (Аннулирование урона)
+                        // МЕХАНИКА НЕПРОБИТИЯ (Аннулирование урона < 20% макс ХП)
                         if (damageTaken < (maxHealth * 0.20f) && UnityEngine.Random.value < Configuration.Instance.ChanceDeflect)
                         {
                             vehicle.askRepair((ushort)damageTaken);
                             VehicleManager.sendVehicleHealth(vehicle, vehicle.health);
-                            UnturnedChat.Say("Рикошет! Урон аннулирован.", Color.green); // Опционально для теста
+                            ModuleDamageHandler.SendChat(vehicle, "РИКОШЕТ! Броня не пробита.", Color.green);
+                            
                             state.LastHealth = vehicle.health;
                             continue;
                         }
 
-                        // 2. Проверка на минимальный урон для критов
+                        // ПРОВЕРКА НА КРИТЫ
                         if (damageTaken >= Configuration.Instance.MinDamageForCrit)
                         {
                             ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
                         }
                     }
-                    // --- ЛОГИКА ПОЧИНКИ (Ремстанция) ---
                     else if (vehicle.health > state.LastHealth)
                     {
-                        // Если ХП выросло — сбрасываем критические повреждения
-                        state.IsTransmissionBroken = false;
-                        state.IsFuelTankBroken = false;
-                        state.IsGunBroken = false;
-                        state.IsOnFire = false;
-                        state.IsSmoking = false;
-                        state.IsStunned = false;
+                        // Сброс состояний при полном лечении (например, на ремстанции)
+                        if (vehicle.health == vehicle.asset.health)
+                        {
+                            state.IsTransmissionBroken = false;
+                            state.IsFuelTankBroken = false;
+                            state.IsGunBroken = false;
+                            state.IsOnFire = false;
+                            state.IsSmoking = false;
+                            state.IsStunned = false;
+                        }
                     }
 
-                    // --- ЭФФЕКТ ЗАДЫМЛЕНИЯ (1 хп/сек) ---
+                    // Урон от задымления (1 хп/сек)
                     if (state.IsSmoking)
                     {
                         EffectManager.sendEffect(Configuration.Instance.SmokeVisualEffectId, 128, vehicle.transform.position + Vector3.up * 1.5f);
@@ -164,7 +158,7 @@ namespace VehicleModulesSystem
                         }
                     }
 
-                    // --- КОСТЫЛЬ ТРАНСМИССИИ (Слив батареи + Инерция) ---
+                    // Обработка сломанной трансмиссии (слив батареи для невозможности старта)
                     if (state.IsTransmissionBroken)
                     {
                         if (vehicle.batteryCharge > 0)
