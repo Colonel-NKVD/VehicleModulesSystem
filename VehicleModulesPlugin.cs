@@ -161,7 +161,7 @@ namespace VehicleModulesSystem
 
                     if (state.IsSmoking)
                     {
-                        EffectManager.sendEffect(Configuration.Instance.SmokeVisualEffectId, 128, vehicle.transform.position + Vector3.up * 1.5f);
+                        EffectManager.sendEffect(36009, 128, vehicle.transform.position + Vector3.up * 1.5f);
                     }
 
                     // --- ИСПРАВЛЕНИЕ АПИ UNTURNED (CS0117 FIX) ---
