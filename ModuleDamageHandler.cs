@@ -130,7 +130,7 @@ namespace VehicleModulesSystem
                 for (int i = 0; i < 3; i++)
                 {
                     Vector3 randomOffset = v.transform.right * Random.Range(-1.5f, 1.5f) + v.transform.forward * Random.Range(-3.5f, 3.5f) + Vector3.up * Random.Range(1.8f, 3.0f);              
-                    EffectManager.sendEffect(139, 128, v.transform.position + randomOffset);
+                    EffectManager.sendEffect(21619, 128, v.transform.position + randomOffset);
                 }
                 VehicleManager.damage(v, 130, 1, false);
                 yield return new WaitForSeconds(0.8f);
@@ -139,7 +139,7 @@ namespace VehicleModulesSystem
 
         private static void ExplodeBreach(InteractableVehicle v)
         {
-            EffectManager.sendEffect(45, 128, v.transform.position + Vector3.up * 2f);
+            EffectManager.sendEffect(21548, 128, v.transform.position + Vector3.up * 2f);
             SendChat(v, "!!! РАЗРЫВ КАЗЕННИКА !!!", Color.red);
             VehicleManager.damage(v, 1000, 1, false);
             foreach (var p in v.passengers)
@@ -177,7 +177,7 @@ namespace VehicleModulesSystem
         public static IEnumerator RepairRoutine(InteractableVehicle v, VehicleState s, ushort stationId, float radius)
         {
             s.IsRepairing = true;
-            SendChat(v, "[ИНЖЕНЕРНЫЙ КОРПУС] Начат капитальный ремонт...", Color.yellow);
+            SendChat(v, "Начат капитальный ремонт...", Color.yellow);
             
             for (int i = 0; i < 15; i++)
             {
