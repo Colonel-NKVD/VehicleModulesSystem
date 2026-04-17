@@ -1,32 +1,60 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFramework>net48</TargetFramework>
-    <AssemblyName>VehicleModulesSystem</AssemblyName>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    
-    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <GenerateDependencyFile>false</GenerateDependencyFile> <ProduceReferenceAssembly>false</ProduceReferenceAssembly> <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
-    
-    <LangVersion>latest</LangVersion>
-  </PropertyGroup>
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>VehicleModulesSystem</AssemblyName>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
 
-  <ItemGroup>
-    <Reference Include="Rocket.API" HintPath="Libraries\Rocket.API.dll" Private="false" />
-    <Reference Include="Rocket.Core" HintPath="Libraries\Rocket.Core.dll" Private="false" />
-    <Reference Include="Rocket.Unturned" HintPath="Libraries\Rocket.Unturned.dll" Private="false" />
-    <Reference Include="Assembly-CSharp" HintPath="Libraries\Assembly-CSharp.dll" Private="false" />
-    <Reference Include="UnityEngine" HintPath="Libraries\UnityEngine.dll" Private="false" />
-    <Reference Include="UnityEngine.CoreModule" HintPath="Libraries\UnityEngine.CoreModule.dll" Private="false" />
-    
-    <Reference Include="0Harmony" HintPath="Libraries\0Harmony.dll" Private="false" />
-    
-    <Reference Include="com.rlabrecque.steamworks.net" HintPath="Libraries\com.rlabrecque.steamworks.net.dll" Private="false" />
-    <Reference Include="SDG.NetTransport" HintPath="Libraries\SDG.NetTransport.dll" Private="false" />
-  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="Rocket.API">
+      <HintPath>Libraries\Rocket.API.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Rocket.Core">
+      <HintPath>Libraries\Rocket.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>Libraries\0Harmony.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="Rocket.Unturned">
+      <HintPath>Libraries\Rocket.Unturned.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>Libraries\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>Libraries\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>Libraries\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>Libraries\UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="com.rlabrecque.steamworks.net">
+      <HintPath>Libraries\com.rlabrecque.steamworks.net.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SDG.NetTransport">
+      <HintPath>Libraries\SDG.NetTransport.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" PrivateAssets="all" />
-  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
 
 </Project>
+
+Это с актуальной, эксперементальной ветки .csproj
