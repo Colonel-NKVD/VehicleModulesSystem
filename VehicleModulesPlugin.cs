@@ -5,6 +5,7 @@ using Rocket.API;
 using Rocket.Core.Plugins;
 using Rocket.Unturned.Events;
 using Rocket.Unturned.Player;
+using Rocket.Unturned.Chat;
 using SDG.Unturned;
 using UnityEngine;
 using HarmonyLib;
@@ -24,12 +25,11 @@ namespace VehicleModulesSystem
         {
             Instance = this;
             
-            // Инициализация Harmony для кастомных хуков 1917+
             try 
             {
                 harmony = new Harmony(HarmonyInstanceId);
                 harmony.PatchAll();
-                Rocket.Core.Logging.Logger.Log("--- [HARMONY] Ядерные патчи успешно применены ---");
+                Rocket.Core.Logging.Logger.Log("--- [HARMONY] Патчи успешно применены ---");
             }
             catch (Exception e) 
             {
@@ -38,16 +38,11 @@ namespace VehicleModulesSystem
 
             UnturnedPlayerEvents.OnPlayerDeath += OnPlayerDeath;
             
-            // Защита датчика от пустого конфига (из старой стабильной версии)
             if (Configuration.Instance.AllowedVehicleIds == null)
             {
                 Configuration.Instance.AllowedVehicleIds = new List<ushort>();
                 Rocket.Core.Logging.Logger.LogWarning("[ВНИМАНИЕ] AllowedVehicleIds был null. Создан пустой список.");
             }
-            
-            Rocket.Core.Logging.Logger.Log("================================================");
-            Rocket.Core.Logging.Logger.Log("--- [OBSERVER] Сенсор 1917+ откалиброван ---");
-            Rocket.Core.Logging.Logger.Log("================================================");
             
             StartCoroutine(VehicleHealthWatcher());
         }
@@ -80,7 +75,33 @@ namespace VehicleModulesSystem
                 player.Player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
         }
 
-        // ЖЕЛЕЗОБЕТОННЫЙ ДАТЧИК
+        // --- ВОССТАНОВЛЕННАЯ ЛОГИКА БИНТА (CS1061 FIX) ---
+        public IEnumerator BandageRoutine(UnturnedPlayer player, ushort bandageId)
+        {
+            yield return new WaitForSeconds(Configuration.Instance.BandageUseTimeSeconds);
+
+            // Проверяем, что игрок не вышел, не умер и все еще в технике
+            if (player == null || player.Player == null || player.Dead || !player.IsInVehicle)
+            {
+                yield break; 
+            }
+
+            var items = player.Inventory.search(bandageId, true, true);
+            if (items.Count > 0)
+            {
+                // Забираем бинт
+                player.Inventory.removeItem(items[0].page, player.Inventory.getIndex(items[0].page, items[0].jar.x, items[0].jar.y));
+                
+                // Лечим (восстанавливаем ХП и снимаем кровотечение)
+                player.Player.life.askHeal(Configuration.Instance.BandageHealAmount, true, true);
+                UnturnedChat.Say(player, ">> ПЕРЕВЯЗКА ЭКИПАЖА ЗАВЕРШЕНА <<", Color.green);
+            }
+            else
+            {
+                UnturnedChat.Say(player, "[ОШИБКА] Бинт не найден в инвентаре!", Color.red);
+            }
+        }
+
         private IEnumerator VehicleHealthWatcher()
         {
             yield return new WaitForSeconds(3.0f);
@@ -92,7 +113,6 @@ namespace VehicleModulesSystem
                 {
                     var vehicle = VehicleManager.vehicles[i];
                     
-                    // Проверка на взрыв и наличие в вайтлисте
                     if (vehicle == null || vehicle.isExploded || !Configuration.Instance.AllowedVehicleIds.Contains(vehicle.id)) 
                     {
                         if (vehicle != null && TrackedVehicles.ContainsKey(vehicle.instanceID))
@@ -102,20 +122,18 @@ namespace VehicleModulesSystem
 
                     VehicleState state = GetVehicleState(vehicle);
 
-                    // Если здоровье упало - фиксируем урон
                     if (vehicle.health < state.LastHealth)
                     {
                         int damageTaken = state.LastHealth - vehicle.health;
                         float maxHealth = vehicle.asset.health;
 
-                        // Логика рикошета (Новый функционал)
                         if (damageTaken < (maxHealth * 0.20f) && UnityEngine.Random.value < Configuration.Instance.ChanceDeflect)
                         {
                             vehicle.askRepair((ushort)damageTaken);
                             VehicleManager.sendVehicleHealth(vehicle, vehicle.health);
                             ModuleDamageHandler.SendChat(vehicle, "[СИСТЕМА] РИКОШЕТ! Броня не пробита.", Color.green);
                         }
-                        else if (damageTaken >= Configuration.Instance.MinDamageForCrit) // Проверка порога
+                        else if (damageTaken >= Configuration.Instance.MinDamageForCrit) 
                         {
                             ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона! Состояние: {vehicle.health}/{maxHealth}", Color.yellow);
                             ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
@@ -123,7 +141,6 @@ namespace VehicleModulesSystem
                     }
                     else if (vehicle.health > state.LastHealth && vehicle.health == vehicle.asset.health)
                     {
-                        // Полный ремонт ванильной механикой сбрасывает модули
                         state.IsTransmissionBroken = false;
                         state.IsFuelTankBroken = false;
                         state.IsGunBroken = false;
@@ -131,8 +148,6 @@ namespace VehicleModulesSystem
                         state.IsSmoking = false;
                         state.IsStunned = false;
                     }
-
-                    // --- ОБРАБОТКА ПОСТОЯННЫХ ЭФФЕКТОВ ---
 
                     if (state.IsStunned)
                     {
@@ -149,14 +164,14 @@ namespace VehicleModulesSystem
                         EffectManager.sendEffect(Configuration.Instance.SmokeVisualEffectId, 128, vehicle.transform.position + Vector3.up * 1.5f);
                     }
 
-                    // Трансмиссия: Исключительно отключение аккумулятора, как ты и просил
+                    // --- ИСПРАВЛЕНИЕ АПИ UNTURNED (CS0117 FIX) ---
+                    // Глушим машину батареей, а синхронизируем пакетом топлива как в старой стабильной сборке
                     if (state.IsTransmissionBroken && vehicle.batteryCharge > 0)
                     {
                         vehicle.batteryCharge = 0;
-                        VehicleManager.sendVehicleBattery(vehicle, 0); // Отправляем пакет батареи, а не топлива
+                        VehicleManager.sendVehicleFuel(vehicle, vehicle.fuel); 
                     }
 
-                    // КРИТИЧЕСКИ ВАЖНО: Всегда обновляем здоровье в конце цикла
                     state.LastHealth = vehicle.health;
                 }
                 yield return new WaitForSeconds(0.5f);
