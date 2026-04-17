@@ -16,9 +16,9 @@ namespace VehicleModulesSystem
 
             float intensity = Mathf.Clamp(dmg / 1500f, 0f, 0.25f); 
 
+            // Контузия
             if (!s.IsStunned && Random.value < (cfg.ChanceStun + intensity))
             {
-                Rocket.Core.Logging.Logger.Log($"[CRIT] Экипаж {v.id} контужен.");
                 VehicleModulesPlugin.Instance.StartCoroutine(StunRoutine(v, s));
             }
 
@@ -31,16 +31,15 @@ namespace VehicleModulesSystem
                     if (!s.IsFuelTankBroken && Random.value < (cfg.ChanceFuelLeak + intensity)) {
                         s.IsFuelTankBroken = true;
                         SendChat(v, "!!! КРИТ: Пробит топливный бак !!!", Color.red);
-                        Rocket.Core.Logging.Logger.Log($"[CRIT] Бак пробит на {v.id}.");
                         VehicleModulesPlugin.Instance.StartCoroutine(FuelRoutine(v, s));
                         criticalsThisHit++;
                     }
                 },
                 () => {
                     if (!s.IsTransmissionBroken && Random.value < (cfg.ChanceTransmission + intensity)) {
-                        s.IsTransmissionBroken = true;
                         SendChat(v, "!!! КРИТ: Трансмиссия выбита !!!", Color.red);
-                        Rocket.Core.Logging.Logger.Log($"[CRIT] Трансмиссия уничтожена на {v.id}.");
+                        s.IsTransmissionBroken = true;
+                        // Трансмиссия глушится моментально через датчик в Plugin.cs
                         criticalsThisHit++;
                     }
                 },
@@ -50,12 +49,12 @@ namespace VehicleModulesSystem
                     } else if (Random.value < (cfg.ChanceGunBroken + intensity)) {
                         s.IsGunBroken = true;
                         SendChat(v, "!!! КРИТ: Орудие заклинило !!!", Color.red);
-                        Rocket.Core.Logging.Logger.Log($"[CRIT] Орудие выбито на {v.id}.");
                         criticalsThisHit++;
                     }
                 }
             };
 
+            // Перемешиваем проверки, чтобы крит всегда был случайным
             for (int i = 0; i < moduleChecks.Count; i++) {
                 int randomIndex = Random.Range(i, moduleChecks.Count);
                 var temp = moduleChecks[i];
@@ -68,66 +67,18 @@ namespace VehicleModulesSystem
                 check.Invoke();
             }
 
+            // Пожар и дым
             if (!s.IsOnFire && Random.value < (cfg.ChanceFire + (intensity * 0.5f)))
             {
                 SendChat(v, "!!! ПОЖАР В БОЕВОМ ОТДЕЛЕНИИ !!!", Color.red);
-                Rocket.Core.Logging.Logger.Log($"[CRIT] ПОЖАР на {v.id}.");
                 VehicleModulesPlugin.Instance.StartCoroutine(FireRoutine(v, s));
             }
             else if (!s.IsSmoking && Random.value < (cfg.ChanceSmoke + intensity))
             {
                 SendChat(v, "[ВНИМАНИЕ] Задымление боевого отделения!", Color.gray);
-                Rocket.Core.Logging.Logger.Log($"[CRIT] Задымление на {v.id}.");
                 s.IsSmoking = true;
                 VehicleModulesPlugin.Instance.StartCoroutine(SmokeRoutine(v, s));
             }
-        }
-
-        private static IEnumerator SmokeRoutine(InteractableVehicle v, VehicleState s)
-        {
-            int duration = 15; 
-            int elapsed = 0;
-
-            while (s.IsSmoking && v != null && !v.isExploded && elapsed < duration)
-            {
-                foreach (var p in v.passengers)
-                {
-                    if (p.player != null)
-                        p.player.player.life.askDamage(1, Vector3.up, EDeathCause.BREATH, ELimb.SPINE, CSteamID.Nil, out _);
-                }
-                yield return new WaitForSeconds(1.0f);
-                elapsed++;
-            }
-            
-            if (s != null)
-            {
-                s.IsSmoking = false;
-                if (v != null && !v.isExploded) SendChat(v, "[СИСТЕМА] Боевое отделение проветрено.", Color.green);
-            }
-        }
-
-        private static IEnumerator FireRoutine(InteractableVehicle v, VehicleState s)
-        {
-            s.IsOnFire = true;
-            while (s.IsOnFire && v != null && !v.isExploded)
-            {
-                for (int i = 0; i < 3; i++)
-                {
-                    Vector3 randomOffset = v.transform.right * Random.Range(-1.5f, 1.5f) + v.transform.forward * Random.Range(-3.5f, 3.5f) + Vector3.up * Random.Range(1.8f, 3.0f);              
-                    EffectManager.sendEffect(139, 128, v.transform.position + randomOffset);
-                }
-                VehicleManager.damage(v, 130, 1, false);
-                yield return new WaitForSeconds(0.8f);
-            }
-        }
-
-        private static void ExplodeBreach(InteractableVehicle v)
-        {
-            EffectManager.sendEffect(45, 128, v.transform.position + Vector3.up * 2f);
-            SendChat(v, "!!! РАЗРЫВ КАЗЕННИКА !!!", Color.red);
-            VehicleManager.damage(v, 1000, 1, false);
-            foreach (var p in v.passengers)
-                if (p.player != null) p.player.player.life.askDamage(80, Vector3.up, EDeathCause.CHARGE, ELimb.SPINE, CSteamID.Nil, out _);
         }
 
         private static IEnumerator StunRoutine(InteractableVehicle v, VehicleState s)
@@ -156,10 +107,112 @@ namespace VehicleModulesSystem
             }
         }
 
+        private static IEnumerator SmokeRoutine(InteractableVehicle v, VehicleState s)
+        {
+            int duration = 15; 
+            int elapsed = 0;
+
+            while (s.IsSmoking && v != null && !v.isExploded && elapsed < duration)
+            {
+                foreach (var p in v.passengers)
+                {
+                    if (p.player != null)
+                        p.player.player.life.askDamage(1, Vector3.up, EDeathCause.BREATH, ELimb.SPINE, CSteamID.Nil, out _);
+                }
+                yield return new WaitForSeconds(1.0f);
+                elapsed++;
+            }
+            
+            if (s != null) s.IsSmoking = false;
+        }
+
+        private static IEnumerator FireRoutine(InteractableVehicle v, VehicleState s)
+        {
+            s.IsOnFire = true;
+            while (s.IsOnFire && v != null && !v.isExploded)
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    Vector3 randomOffset = v.transform.right * Random.Range(-1.5f, 1.5f) + v.transform.forward * Random.Range(-3.5f, 3.5f) + Vector3.up * Random.Range(1.8f, 3.0f);              
+                    EffectManager.sendEffect(139, 128, v.transform.position + randomOffset);
+                }
+                VehicleManager.damage(v, 130, 1, false);
+                yield return new WaitForSeconds(0.8f);
+            }
+        }
+
+        private static void ExplodeBreach(InteractableVehicle v)
+        {
+            EffectManager.sendEffect(45, 128, v.transform.position + Vector3.up * 2f);
+            SendChat(v, "!!! РАЗРЫВ КАЗЕННИКА !!!", Color.red);
+            VehicleManager.damage(v, 1000, 1, false);
+            foreach (var p in v.passengers)
+                if (p.player != null) p.player.player.life.askDamage(80, Vector3.up, EDeathCause.CHARGE, ELimb.SPINE, CSteamID.Nil, out _);
+        }
+
         public static void SendChat(InteractableVehicle v, string msg, Color c)
         {
             foreach (var p in v.passengers)
                 if (p.player != null) UnturnedChat.Say(p.player.playerID.steamID, msg, c);
+        }
+        
+        public static bool IsNearRepairStation(Vector3 position, ushort targetId, float radius)
+        {
+            float sqrRadius = radius * radius;
+            for (byte x = 0; x < Regions.WORLD_SIZE; x++)
+            {
+                for (byte y = 0; y < Regions.WORLD_SIZE; y++)
+                {
+                    if (BarricadeManager.regions[x, y] != null)
+                    {
+                        foreach (BarricadeDrop drop in BarricadeManager.regions[x, y].drops)
+                        {
+                            if (drop.asset.id == targetId && (drop.model.position - position).sqrMagnitude <= sqrRadius)
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        public static IEnumerator RepairRoutine(InteractableVehicle v, VehicleState s, ushort stationId, float radius)
+        {
+            s.IsRepairing = true;
+            SendChat(v, "[ИНЖЕНЕРНЫЙ КОРПУС] Начат капитальный ремонт...", Color.yellow);
+            
+            for (int i = 0; i < 15; i++) // 15 секунд починки
+            {
+                if (v == null || v.isExploded) break;
+                if (!IsNearRepairStation(v.transform.position, stationId, radius))
+                {
+                    SendChat(v, "[ОШИБКА] Связь со станцией потеряна! Ремонт прерван.", Color.red);
+                    s.IsRepairing = false;
+                    yield break;
+                }
+                yield return new WaitForSeconds(1.0f);
+            }
+
+            if (v != null && !v.isExploded)
+            {
+                v.askRepair(10000);
+                v.batteryCharge = 10000;
+                VehicleManager.sendVehicleHealth(v, v.health); 
+                VehicleManager.sendVehicleBattery(v, v.batteryCharge);
+                VehicleManager.sendVehicleFuel(v, v.fuel);
+                
+                s.IsFuelTankBroken = false;
+                s.IsTransmissionBroken = false; 
+                s.IsGunBroken = false;
+                s.IsOnFire = false;
+                s.IsSmoking = false;
+                s.IsStunned = false;
+                
+                SendChat(v, ">> ТЕХНИКА ПОЛНОСТЬЮ ВОССТАНОВЛЕНА <<", Color.green);
+            }
+            s.IsRepairing = false;
         }
     }
 }
