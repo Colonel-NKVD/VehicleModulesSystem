@@ -2,8 +2,8 @@ namespace VehicleModulesSystem
 {
     public class VehicleState
     {
-        public ushort LastHealth;
         public uint InstanceID;
+        public ushort LastHealth;
         public bool IsFuelTankBroken;
         public bool IsTransmissionBroken;
         public bool IsGunBroken;
