@@ -16,7 +16,6 @@ namespace VehicleModulesSystem
 
             float intensity = Mathf.Clamp(dmg / 1500f, 0f, 0.25f); 
 
-            // Контузия
             if (!s.IsStunned && Random.value < (cfg.ChanceStun + intensity))
             {
                 VehicleModulesPlugin.Instance.StartCoroutine(StunRoutine(v, s));
@@ -39,7 +38,6 @@ namespace VehicleModulesSystem
                     if (!s.IsTransmissionBroken && Random.value < (cfg.ChanceTransmission + intensity)) {
                         SendChat(v, "!!! КРИТ: Трансмиссия выбита !!!", Color.red);
                         s.IsTransmissionBroken = true;
-                        // Трансмиссия глушится моментально через датчик в Plugin.cs
                         criticalsThisHit++;
                     }
                 },
@@ -54,7 +52,6 @@ namespace VehicleModulesSystem
                 }
             };
 
-            // Перемешиваем проверки, чтобы крит всегда был случайным
             for (int i = 0; i < moduleChecks.Count; i++) {
                 int randomIndex = Random.Range(i, moduleChecks.Count);
                 var temp = moduleChecks[i];
@@ -67,7 +64,6 @@ namespace VehicleModulesSystem
                 check.Invoke();
             }
 
-            // Пожар и дым
             if (!s.IsOnFire && Random.value < (cfg.ChanceFire + (intensity * 0.5f)))
             {
                 SendChat(v, "!!! ПОЖАР В БОЕВОМ ОТДЕЛЕНИИ !!!", Color.red);
@@ -183,7 +179,7 @@ namespace VehicleModulesSystem
             s.IsRepairing = true;
             SendChat(v, "[ИНЖЕНЕРНЫЙ КОРПУС] Начат капитальный ремонт...", Color.yellow);
             
-            for (int i = 0; i < 15; i++) // 15 секунд починки
+            for (int i = 0; i < 15; i++)
             {
                 if (v == null || v.isExploded) break;
                 if (!IsNearRepairStation(v.transform.position, stationId, radius))
@@ -200,7 +196,9 @@ namespace VehicleModulesSystem
                 v.askRepair(10000);
                 v.batteryCharge = 10000;
                 VehicleManager.sendVehicleHealth(v, v.health); 
-                VehicleManager.sendVehicleBattery(v, v.batteryCharge);
+                // --- ИСПРАВЛЕНИЕ АПИ UNTURNED (CS0117 FIX) ---
+                // Убираем несуществующий sendVehicleBattery. Синхронизации топлива достаточно, 
+                // чтобы триггернуть апдейт статов, а батарея 10000 разрешит завести мотор.
                 VehicleManager.sendVehicleFuel(v, v.fuel);
                 
                 s.IsFuelTankBroken = false;
