@@ -22,16 +22,20 @@ namespace VehicleModulesSystem
             Instance = this;
             
             UnturnedPlayerEvents.OnPlayerDeath += OnPlayerDeath;
-            
-            // Проверка инициализации списка
+
+            // Проверка инициализации списка ID
             if (Configuration.Instance.AllowedVehicleIds == null)
             {
                 Configuration.Instance.AllowedVehicleIds = new List<ushort>();
             }
-            
+
+            // Запускаем мониторинг
             StartCoroutine(VehicleHealthWatcher());
-            Rocket.Core.Logging.Logger.Log("--- [VehicleModules] ПЛАГИН ЗАПУЩЕН ---");
-            Rocket.Core.Logging.Logger.Log($"--- [VehicleModules] В белом списке ID: {string.Join(", ", Configuration.Instance.AllowedVehicleIds)} ---");
+            
+            Rocket.Core.Logging.Logger.Log("================================================");
+            Rocket.Core.Logging.Logger.Log("--- [VehicleModules] ПЛАГИН ЗАГРУЖЕН ---");
+            Rocket.Core.Logging.Logger.Log($"--- [VehicleModules] ID в белом списке: {Configuration.Instance.AllowedVehicleIds.Count} ---");
+            Rocket.Core.Logging.Logger.Log("================================================");
         }
 
         protected override void Unload()
@@ -39,6 +43,7 @@ namespace VehicleModulesSystem
             UnturnedPlayerEvents.OnPlayerDeath -= OnPlayerDeath;
             StopAllCoroutines();
             TrackedVehicles.Clear();
+            Instance = null;
         }
 
         public VehicleState GetVehicleState(InteractableVehicle v)
@@ -60,11 +65,9 @@ namespace VehicleModulesSystem
 
         private IEnumerator VehicleHealthWatcher()
         {
-            // Ждем загрузки карты
-            yield return new WaitForSeconds(5.0f);
-            Rocket.Core.Logging.Logger.Log("[SENSOR] Датчик поллинга активирован.");
-            
-            int tickCounter = 0;
+            // Небольшая задержка, чтобы мир успел прогрузиться
+            yield return new WaitForSeconds(3.0f);
+            Rocket.Core.Logging.Logger.Log("[VehicleModules] Поток мониторинга ХП запущен.");
 
             while (true)
             {
@@ -76,22 +79,14 @@ namespace VehicleModulesSystem
 
                 try
                 {
-                    tickCounter++;
-                    if (tickCounter >= 20) 
-                    {
-                        // Каждые 10 секунд пишем статус в консоль
-                        Rocket.Core.Logging.Logger.Log($"[SENSOR-HEARTBEAT] Машин в мире: {VehicleManager.vehicles.Count}, Отслеживается: {TrackedVehicles.Count}");
-                        tickCounter = 0;
-                    }
-
                     for (int i = VehicleManager.vehicles.Count - 1; i >= 0; i--)
                     {
                         var vehicle = VehicleManager.vehicles[i];
                         if (vehicle == null || vehicle.asset == null) continue;
 
-                        ushort vId = vehicle.id; // Используем vehicle.id напрямую
+                        ushort vId = vehicle.id;
 
-                        // 1. ПРОВЕРКА ВАЙТЛИСТА (Самое важное место)
+                        // ПРОВЕРКА: Если техники нет в списке — игнорируем её
                         if (vehicle.isExploded || !Configuration.Instance.AllowedVehicleIds.Contains(vId)) 
                         {
                             if (TrackedVehicles.ContainsKey(vehicle.instanceID))
@@ -101,29 +96,31 @@ namespace VehicleModulesSystem
 
                         VehicleState state = GetVehicleState(vehicle);
 
-                        // 2. ДЕТЕКЦИЯ ЛЮБОГО ИЗМЕНЕНИЯ ХП
+                        // Детекция получения урона
                         if (vehicle.health < state.LastHealth)
                         {
                             int damageTaken = state.LastHealth - vehicle.health;
                             
-                            // ДИАГНОСТИЧЕСКИЙ ЛОГ В КОНСОЛЬ (Будет виден всегда)
-                            Rocket.Core.Logging.Logger.Log($"[HIT] Техника ID {vId} получила {damageTaken} урона. (Текущее ХП: {vehicle.health})");
+                            // ВАЖНО: Вывод в консоль сервера для диагностики
+                            Rocket.Core.Logging.Logger.Log($"[HIT] Техника {vId} (Inst: {vehicle.instanceID}) получила {damageTaken} урона. ХП: {vehicle.health}/{vehicle.asset.health}");
 
+                            // Сообщение игрокам внутри (если они есть)
+                            ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона!", Color.yellow);
+                            
                             // Логика рикошета
                             if (damageTaken < (vehicle.asset.health * 0.20f) && UnityEngine.Random.value < Configuration.Instance.ChanceDeflect)
                             {
                                 vehicle.askRepair((ushort)damageTaken);
                                 VehicleManager.sendVehicleHealth(vehicle, vehicle.health);
-                                ModuleDamageHandler.SendChat(vehicle, "[СИСТЕМА] РИКОШЕТ! Броня не пробита.", Color.green);
+                                ModuleDamageHandler.SendChat(vehicle, "[СИСТЕМА] РИКОШЕТ! Урон поглощен броней.", Color.green);
                             }
-                            // Логика Крита
                             else if (damageTaken >= Configuration.Instance.MinDamageForCrit) 
                             {
                                 ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
                             }
                         }
 
-                        // Сброс состояний при починке
+                        // Сброс всех критов при полной починке
                         if (vehicle.health > state.LastHealth && vehicle.health == vehicle.asset.health)
                         {
                             state.IsFuelTankBroken = false;
@@ -134,7 +131,7 @@ namespace VehicleModulesSystem
                             state.IsStunned = false;
                         }
 
-                        // Обработка активных эффектов
+                        // Активные эффекты (Трансмиссия/Аккумулятор)
                         if (state.IsTransmissionBroken && vehicle.batteryCharge > 0)
                         {
                             vehicle.batteryCharge = 0;
@@ -146,10 +143,23 @@ namespace VehicleModulesSystem
                 }
                 catch (Exception ex)
                 {
-                    Rocket.Core.Logging.Logger.LogError("[SENSOR-CRITICAL] Ошибка: " + ex.Message);
+                    Rocket.Core.Logging.Logger.LogError("[VehicleModules] Ошибка в цикле мониторинга: " + ex.Message);
                 }
                 
                 yield return new WaitForSeconds(0.5f);
+            }
+        }
+
+        // Вспомогательный метод для лечения (используется в CommandBandage)
+        public IEnumerator BandageRoutine(UnturnedPlayer player, ushort bandageId)
+        {
+            yield return new WaitForSeconds(Configuration.Instance.BandageUseTimeSeconds);
+            
+            if (player != null && player.IsInVehicle)
+            {
+                player.Heal(Configuration.Instance.BandageHealAmount);
+                player.Inventory.removeItem(player.Inventory.getIndex(bandageId), 0);
+                UnturnedChat.Say(player, "Вы перевязали раны.", Color.green);
             }
         }
     }
