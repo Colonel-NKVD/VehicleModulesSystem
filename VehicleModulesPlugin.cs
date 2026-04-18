@@ -106,7 +106,7 @@ namespace VehicleModulesSystem
 
             while (true)
             {
-                // 1. ПРОВЕРКА НА NULL ВНЕ TRY-БЛОКА (чтобы работал yield)
+                // 1. ПРОВЕРКА НА NULL ВНЕ TRY-БЛОКА
                 if (VehicleManager.vehicles == null) 
                 { 
                     yield return new WaitForSeconds(1.0f); 
@@ -116,9 +116,10 @@ namespace VehicleModulesSystem
                 try
                 {
                     tickCounter++;
-                    if (tickCounter >= 20) 
+                    bool showHeartbeat = (tickCounter >= 20);
+                    if (showHeartbeat) 
                     {
-                        Rocket.Core.Logging.Logger.Log($"[SENSOR-HEARTBEAT] Датчик активен. Машин: {VehicleManager.vehicles.Count}. Вайтлист: {Configuration.Instance.AllowedVehicleIds.Count}");
+                        Rocket.Core.Logging.Logger.Log($"[SENSOR-HEARTBEAT] Датчик активен. Машин: {VehicleManager.vehicles.Count}.");
                         tickCounter = 0;
                     }
 
@@ -129,6 +130,7 @@ namespace VehicleModulesSystem
 
                         ushort vId = vehicle.asset.id;
 
+                        // Если техника не в вайтлисте или уничтожена — не тратим ресурсы
                         if (vehicle.isExploded || !Configuration.Instance.AllowedVehicleIds.Contains(vId)) 
                         {
                             if (TrackedVehicles.ContainsKey(vehicle.instanceID))
@@ -138,25 +140,31 @@ namespace VehicleModulesSystem
 
                         VehicleState state = GetVehicleState(vehicle);
 
+                        // --- ПРОВЕРКА ПОЛУЧЕНИЯ УРОНА ---
                         if (vehicle.health < state.LastHealth)
                         {
                             int damageTaken = state.LastHealth - vehicle.health;
                             float maxHealth = vehicle.asset.health;
 
-                            Rocket.Core.Logging.Logger.Log($"[SENSOR-TRIGGER] Техника {vId} ({vehicle.instanceID}) -> Урон: {damageTaken} (HP: {state.LastHealth} -> {vehicle.health})");
+                            // ДИАГНОСТИКА: Этот лог покажет, видит ли плагин удар вообще
+                            Rocket.Core.Logging.Logger.Log($"[SENSOR-TRIGGER] {vehicle.asset.vehicleName} ({vId}) получил {damageTaken} урона. (Порог: {Configuration.Instance.MinDamageForCrit})");
 
+                            // 1. Проверка на рикошет (если урон < 20% от макс ХП)
                             if (damageTaken < (maxHealth * 0.20f) && UnityEngine.Random.value < Configuration.Instance.ChanceDeflect)
                             {
                                 vehicle.askRepair((ushort)damageTaken);
                                 VehicleManager.sendVehicleHealth(vehicle, vehicle.health);
                                 ModuleDamageHandler.SendChat(vehicle, "[СИСТЕМА] РИКОШЕТ! Броня не пробита.", Color.green);
                             }
+                            // 2. Проверка на Крит
                             else if (damageTaken >= Configuration.Instance.MinDamageForCrit) 
                             {
-                                ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона! Состояние: {vehicle.health}/{maxHealth}", Color.yellow);
+                                Rocket.Core.Logging.Logger.Log($"[SENSOR-CRIT-CALL] Урон выше порога. Вызываю ProcessDamage для {vId}");
+                                ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона!", Color.yellow);
                                 ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
                             }
                         }
+                        // Сброс состояний при полной починке
                         else if (vehicle.health > state.LastHealth && vehicle.health == vehicle.asset.health)
                         {
                             state.IsTransmissionBroken = false;
@@ -167,6 +175,7 @@ namespace VehicleModulesSystem
                             state.IsStunned = false;
                         }
 
+                        // --- ОБРАБОТКА АКТИВНЫХ СОСТОЯНИЙ ---
                         if (state.IsStunned)
                         {
                             var rb = vehicle.GetComponent<Rigidbody>();
@@ -189,7 +198,7 @@ namespace VehicleModulesSystem
                 }
                 catch (Exception ex)
                 {
-                    Rocket.Core.Logging.Logger.LogError("[SENSOR-CRITICAL] Ошибка: " + ex.Message);
+                    Rocket.Core.Logging.Logger.LogError("[SENSOR-CRITICAL] Ошибка цикла: " + ex.Message);
                 }
                 
                 // 2. ОСНОВНАЯ ПАУЗА ВНЕ TRY-БЛОКА
