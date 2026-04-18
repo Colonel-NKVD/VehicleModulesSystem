@@ -3,7 +3,6 @@ using System.Collections;
 using SDG.Unturned;
 using UnityEngine;
 using Rocket.Unturned.Chat;
-using Steamworks;
 
 namespace VehicleModulesSystem
 {
@@ -14,81 +13,42 @@ namespace VehicleModulesSystem
             var cfg = VehicleModulesPlugin.Instance.Configuration.Instance;
             if (s.IsOnFire) return;
 
-            float intensity = Mathf.Clamp(dmg / 1500f, 0f, 0.25f); 
-
-            if (!s.IsStunned && Random.value < (cfg.ChanceStun + intensity))
+            // Контузия (Stun)
+            if (!s.IsStunned && Random.value < cfg.ChanceStun)
             {
                 VehicleModulesPlugin.Instance.StartCoroutine(StunRoutine(v, s));
             }
 
-            int criticalsThisHit = 0;
-            int maxCriticals = dmg > 600 ? 2 : 1; 
+            // Шанс крита увеличивается от силы урона
+            float damageMultiplier = Mathf.Clamp(dmg / 500f, 1f, 2f);
 
-            List<System.Action> moduleChecks = new List<System.Action>
+            if (!s.IsFuelTankBroken && Random.value < (cfg.ChanceFuelLeak * damageMultiplier))
             {
-                () => {
-                    if (!s.IsFuelTankBroken && Random.value < (cfg.ChanceFuelLeak + intensity)) {
-                        s.IsFuelTankBroken = true;
-                        SendChat(v, "!!! КРИТ: Пробит топливный бак !!!", Color.red);
-                        VehicleModulesPlugin.Instance.StartCoroutine(FuelRoutine(v, s));
-                        criticalsThisHit++;
-                    }
-                },
-                () => {
-                    if (!s.IsTransmissionBroken && Random.value < (cfg.ChanceTransmission + intensity)) {
-                        SendChat(v, "!!! КРИТ: Трансмиссия выбита !!!", Color.red);
-                        s.IsTransmissionBroken = true;
-                        criticalsThisHit++;
-                    }
-                },
-                () => {
-                    if (s.IsGunBroken) {
-                        if (Random.value < 0.25f) ExplodeBreach(v);
-                    } else if (Random.value < (cfg.ChanceGunBroken + intensity)) {
-                        s.IsGunBroken = true;
-                        SendChat(v, "!!! КРИТ: Орудие заклинило !!!", Color.red);
-                        criticalsThisHit++;
-                    }
-                }
-            };
-
-            for (int i = 0; i < moduleChecks.Count; i++) {
-                int randomIndex = Random.Range(i, moduleChecks.Count);
-                var temp = moduleChecks[i];
-                moduleChecks[i] = moduleChecks[randomIndex];
-                moduleChecks[randomIndex] = temp;
+                s.IsFuelTankBroken = true;
+                SendChat(v, "!!! КРИТ: Пробит топливный бак !!!", Color.red);
+                VehicleModulesPlugin.Instance.StartCoroutine(FuelRoutine(v, s));
             }
 
-            foreach (var check in moduleChecks) {
-                if (criticalsThisHit >= maxCriticals) break;
-                check.Invoke();
+            if (!s.IsTransmissionBroken && Random.value < (cfg.ChanceTransmission * damageMultiplier))
+            {
+                s.IsTransmissionBroken = true;
+                v.batteryCharge = 0;
+                VehicleManager.sendVehicleFuel(v, v.fuel);
+                SendChat(v, "!!! КРИТ: Повреждение трансмиссии !!!", Color.red);
             }
 
-            if (!s.IsOnFire && Random.value < (cfg.ChanceFire + (intensity * 0.5f)))
+            if (!s.IsSmoking && Random.value < cfg.ChanceSmoke)
             {
-                SendChat(v, "!!! ПОЖАР В БОЕВОМ ОТДЕЛЕНИИ !!!", Color.red);
-                VehicleModulesPlugin.Instance.StartCoroutine(FireRoutine(v, s));
-            }
-            else if (!s.IsSmoking && Random.value < (cfg.ChanceSmoke + intensity))
-            {
-                SendChat(v, "[ВНИМАНИЕ] Задымление боевого отделения!", Color.gray);
                 s.IsSmoking = true;
-                VehicleModulesPlugin.Instance.StartCoroutine(SmokeRoutine(v, s));
+                SendChat(v, "[СИСТЕМА] Двигатель поврежден, наблюдается задымление.", Color.gray);
             }
         }
 
         private static IEnumerator StunRoutine(InteractableVehicle v, VehicleState s)
         {
             s.IsStunned = true;
-            SendChat(v, ">> ЭКИПАЖ КОНТУЖЕН <<", Color.yellow);
-            foreach (var p in v.passengers)
-                if (p.player != null) p.player.player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, true);
-            
-            yield return new WaitForSeconds(5.0f);
-            
-            if (v != null)
-                foreach (var p in v.passengers)
-                    if (p.player != null) p.player.player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
+            SendChat(v, ">> ЭКИПАЖ КОНТУЖЕН <<", Color.red);
+            yield return new WaitForSeconds(4.0f);
             s.IsStunned = false;
         }
 
@@ -96,121 +56,21 @@ namespace VehicleModulesSystem
         {
             while (s.IsFuelTankBroken && v != null && !v.isExploded && v.fuel > 0)
             {
-                EffectManager.sendEffect(16, 128, v.transform.position + Vector3.up);
-                v.fuel = (ushort)Mathf.Max(0, v.fuel - 35);
+                v.fuel = (ushort)Mathf.Max(0, v.fuel - 20);
                 VehicleManager.sendVehicleFuel(v, v.fuel);
-                yield return new WaitForSeconds(1.0f);
+                yield return new WaitForSeconds(2.0f);
             }
-        }
-
-        private static IEnumerator SmokeRoutine(InteractableVehicle v, VehicleState s)
-        {
-            int duration = 15; 
-            int elapsed = 0;
-
-            while (s.IsSmoking && v != null && !v.isExploded && elapsed < duration)
-            {
-                foreach (var p in v.passengers)
-                {
-                    if (p.player != null)
-                        p.player.player.life.askDamage(1, Vector3.up, EDeathCause.BREATH, ELimb.SPINE, CSteamID.Nil, out _);
-                }
-                yield return new WaitForSeconds(1.0f);
-                elapsed++;
-            }
-            
-            if (s != null) s.IsSmoking = false;
-        }
-
-        private static IEnumerator FireRoutine(InteractableVehicle v, VehicleState s)
-        {
-            s.IsOnFire = true;
-            while (s.IsOnFire && v != null && !v.isExploded)
-            {
-                for (int i = 0; i < 3; i++)
-                {
-                    Vector3 randomOffset = v.transform.right * Random.Range(-1.5f, 1.5f) + v.transform.forward * Random.Range(-3.5f, 3.5f) + Vector3.up * Random.Range(1.8f, 3.0f);              
-                    EffectManager.sendEffect(21619, 128, v.transform.position + randomOffset);
-                }
-                VehicleManager.damage(v, 130, 1, false);
-                yield return new WaitForSeconds(0.8f);
-            }
-        }
-
-        private static void ExplodeBreach(InteractableVehicle v)
-        {
-            EffectManager.sendEffect(21548, 128, v.transform.position + Vector3.up * 2f);
-            SendChat(v, "!!! РАЗРЫВ КАЗЕННИКА !!!", Color.red);
-            VehicleManager.damage(v, 1000, 1, false);
-            foreach (var p in v.passengers)
-                if (p.player != null) p.player.player.life.askDamage(80, Vector3.up, EDeathCause.CHARGE, ELimb.SPINE, CSteamID.Nil, out _);
         }
 
         public static void SendChat(InteractableVehicle v, string msg, Color c)
         {
             foreach (var p in v.passengers)
-                if (p.player != null) UnturnedChat.Say(p.player.playerID.steamID, msg, c);
-        }
-        
-        public static bool IsNearRepairStation(Vector3 position, ushort targetId, float radius)
-        {
-            float sqrRadius = radius * radius;
-            for (byte x = 0; x < Regions.WORLD_SIZE; x++)
             {
-                for (byte y = 0; y < Regions.WORLD_SIZE; y++)
+                if (p.player != null)
                 {
-                    if (BarricadeManager.regions[x, y] != null)
-                    {
-                        foreach (BarricadeDrop drop in BarricadeManager.regions[x, y].drops)
-                        {
-                            if (drop.asset.id == targetId && (drop.model.position - position).sqrMagnitude <= sqrRadius)
-                            {
-                                return true;
-                            }
-                        }
-                    }
+                    UnturnedChat.Say(p.player.playerID.steamID, msg, c);
                 }
             }
-            return false;
-        }
-
-        public static IEnumerator RepairRoutine(InteractableVehicle v, VehicleState s, ushort stationId, float radius)
-        {
-            s.IsRepairing = true;
-            SendChat(v, "Начат капитальный ремонт...", Color.yellow);
-            
-            for (int i = 0; i < 15; i++)
-            {
-                if (v == null || v.isExploded) break;
-                if (!IsNearRepairStation(v.transform.position, stationId, radius))
-                {
-                    SendChat(v, "[ОШИБКА] Связь со станцией потеряна! Ремонт прерван.", Color.red);
-                    s.IsRepairing = false;
-                    yield break;
-                }
-                yield return new WaitForSeconds(1.0f);
-            }
-
-            if (v != null && !v.isExploded)
-            {
-                v.askRepair(10000);
-                v.batteryCharge = 10000;
-                VehicleManager.sendVehicleHealth(v, v.health); 
-                // --- ИСПРАВЛЕНИЕ АПИ UNTURNED (CS0117 FIX) ---
-                // Убираем несуществующий sendVehicleBattery. Синхронизации топлива достаточно, 
-                // чтобы триггернуть апдейт статов, а батарея 10000 разрешит завести мотор.
-                VehicleManager.sendVehicleFuel(v, v.fuel);
-                
-                s.IsFuelTankBroken = false;
-                s.IsTransmissionBroken = false; 
-                s.IsGunBroken = false;
-                s.IsOnFire = false;
-                s.IsSmoking = false;
-                s.IsStunned = false;
-                
-                SendChat(v, ">> ТЕХНИКА ПОЛНОСТЬЮ ВОССТАНОВЛЕНА <<", Color.green);
-            }
-            s.IsRepairing = false;
         }
     }
 }
