@@ -114,7 +114,7 @@ namespace VehicleModulesSystem
             if (v != null && s.IsTransmissionBroken)
             {
                 v.batteryCharge = 0;
-                VehicleManager.sendVehicleBattery(v, 0); // Синхронизируем именно батарею
+                VehicleManager.sendVehicleBatteryCharge(v, 0); // Синхронизируем именно батарею
             }
         }
         
