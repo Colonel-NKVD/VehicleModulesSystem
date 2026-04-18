@@ -156,15 +156,35 @@ namespace VehicleModulesSystem
             state.IsStunned = false;
         }
 
-        public IEnumerator BandageRoutine(UnturnedPlayer player, ushort bandageId)
+      public IEnumerator BandageRoutine(UnturnedPlayer player, ushort bandageId)
         {
             yield return new WaitForSeconds(Configuration.Instance.BandageUseTimeSeconds);
-            if (player != null && player.IsInVehicle)
+            
+            // Проверяем, что игрок все еще в машине и жив
+            if (player != null && player.IsInVehicle && !player.Dead)
             {
-                player.Heal(Configuration.Instance.BandageHealAmount);
-                player.Inventory.removeItem(player.Inventory.getIndex(bandageId), 0);
-                UnturnedChat.Say(player, "Раны перевязаны.", Color.green);
+                // Ищем бинт по всем страницам инвентаря
+                var items = player.Inventory.search(bandageId, true, true);
+                if (items.Count > 0)
+                {
+                    // Получаем точные координаты первого найденного бинта
+                    byte page = items[0].page;
+                    byte x = items[0].jar.x;
+                    byte y = items[0].jar.y;
+                    
+                    // Конвертируем координаты в индекс
+                    byte index = player.Inventory.getIndex(page, x, y);
+
+                    // Удаляем предмет и лечим
+                    player.Inventory.removeItem(page, index);
+                    player.Player.life.askHeal(Configuration.Instance.BandageHealAmount, true, true);
+                    UnturnedChat.Say(player, ">> ПЕРЕВЯЗКА ЭКИПАЖА ЗАВЕРШЕНА <<", Color.green);
+                }
+                else
+                {
+                    UnturnedChat.Say(player, "[ОШИБКА] Бинт не найден в инвентаре!", Color.red);
+                }
             }
-        }
+        }   
     }
 }
