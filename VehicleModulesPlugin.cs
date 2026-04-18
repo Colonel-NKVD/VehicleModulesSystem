@@ -8,6 +8,7 @@ using Rocket.Unturned.Player;
 using Rocket.Unturned.Chat;
 using SDG.Unturned;
 using UnityEngine;
+using HarmonyLib;
 
 namespace VehicleModulesSystem
 {
@@ -15,27 +16,35 @@ namespace VehicleModulesSystem
     {
         public static VehicleModulesPlugin Instance;
         public Dictionary<uint, VehicleState> TrackedVehicles = new Dictionary<uint, VehicleState>();
+        private Harmony harmony;
 
         protected override void Load()
         {
             Instance = this;
-            UnturnedPlayerEvents.OnPlayerDeath += OnPlayerDeath;
+            
+            // Harmony (если используешь патчи в других файлах)
+            try {
+                harmony = new Harmony("com.ironmud.vehiclemodules");
+                harmony.PatchAll();
+            } catch (Exception e) {
+                Rocket.Core.Logging.Logger.Log("Harmony Error: " + e.Message);
+            }
 
+            UnturnedPlayerEvents.OnPlayerDeath += OnPlayerDeath;
+            
             if (Configuration.Instance.AllowedVehicleIds == null)
                 Configuration.Instance.AllowedVehicleIds = new List<ushort>();
 
-            // Запуск корутины мониторинга
             StartCoroutine(VehicleHealthWatcher());
             
             Rocket.Core.Logging.Logger.Log("================================================");
-            Rocket.Core.Logging.Logger.Log("--- [VehicleModules] СИСТЕМА ДАТЧИКОВ АКТИВИРОВАНА ---");
-            Rocket.Core.Logging.Logger.Log($"--- Загружено ID техники: {Configuration.Instance.AllowedVehicleIds.Count} ---");
+            Rocket.Core.Logging.Logger.Log("--- [VehicleModules] СИСТЕМА ЗАПУЩЕНА ---");
+            Rocket.Core.Logging.Logger.Log($"--- Отслеживается ID техники: {Configuration.Instance.AllowedVehicleIds.Count} ---");
             Rocket.Core.Logging.Logger.Log("================================================");
         }
 
         protected override void Unload()
         {
-            UnturnedPlayerEvents.OnPlayerDeath -= OnPlayerDeath;
             StopAllCoroutines();
             TrackedVehicles.Clear();
             Instance = null;
@@ -60,131 +69,85 @@ namespace VehicleModulesSystem
 
         private IEnumerator VehicleHealthWatcher()
         {
-            // Небольшая задержка перед началом работы
-            yield return new WaitForSeconds(2.0f);
+            yield return new WaitForSeconds(3.0f); // Даем серверу прогрузиться
 
             while (true)
             {
                 if (VehicleManager.vehicles == null) { yield return new WaitForSeconds(1.0f); continue; }
 
-                try
+                for (int i = VehicleManager.vehicles.Count - 1; i >= 0; i--)
                 {
-                    for (int i = VehicleManager.vehicles.Count - 1; i >= 0; i--)
+                    var vehicle = VehicleManager.vehicles[i];
+                    if (vehicle == null || vehicle.asset == null || vehicle.isExploded) continue;
+
+                    // ПРОВЕРКА ID: Если танка нет в списке, датчик на него не реагирует
+                    if (!Configuration.Instance.AllowedVehicleIds.Contains(vehicle.id)) continue;
+
+                    VehicleState state = GetVehicleState(vehicle);
+
+                    // ДАТЧИК УРОНА
+                    if (vehicle.health < state.LastHealth)
                     {
-                        var vehicle = VehicleManager.vehicles[i];
-                        if (vehicle == null || vehicle.asset == null) continue;
+                        int damageTaken = state.LastHealth - vehicle.health;
+                        
+                        // ЛОГ В КОНСОЛЬ (для тебя)
+                        Rocket.Core.Logging.Logger.Log($"[SENSOR] Техника {vehicle.id} получила {damageTaken} урона.");
 
-                        // Если техника уничтожена или не в списке — удаляем из отслеживания
-                        if (vehicle.isExploded || !Configuration.Instance.AllowedVehicleIds.Contains(vehicle.id))
+                        // СООБЩЕНИЕ ЭКИПАЖУ (как в старые добрые)
+                        ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Попадание! -{damageTaken} HP. Осталось: {vehicle.health}", Color.yellow);
+
+                        // ЛОГИКА БРОНИ И КРИТОВ
+                        if (damageTaken < Configuration.Instance.MinDamageForCrit && UnityEngine.Random.value < Configuration.Instance.ChanceDeflect)
                         {
-                            if (TrackedVehicles.ContainsKey(vehicle.instanceID))
-                                TrackedVehicles.Remove(vehicle.instanceID);
-                            continue;
+                            vehicle.askRepair((ushort)damageTaken);
+                            VehicleManager.sendVehicleHealth(vehicle, vehicle.health);
+                            ModuleDamageHandler.SendChat(vehicle, "[БРОНЯ] Рикошет! Урон не нанесен.", Color.green);
                         }
-
-                        VehicleState state = GetVehicleState(vehicle);
-
-                        // --- ГЛАВНЫЙ ДАТЧИК УРОНА ---
-                        if (vehicle.health < state.LastHealth)
+                        else
                         {
-                            int damageTaken = state.LastHealth - vehicle.health;
-                            
-                            // 1. Логируем в консоль (всегда, для отладки)
-                            Rocket.Core.Logging.Logger.Log($"[HIT] {vehicle.asset.vehicleName} ({vehicle.id}): -{damageTaken} HP. Текущее: {vehicle.health}");
-
-                            // 2. Оповещаем экипаж (как в старых версиях)
-                            ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона! Состояние: {vehicle.health}/{vehicle.asset.health}", Color.yellow);
-
-                            // 3. Проверка на рикошет
-                            if (damageTaken < (vehicle.asset.health * 0.15f) && UnityEngine.Random.value < Configuration.Instance.ChanceDeflect)
-                            {
-                                // Возвращаем здоровье (визуальный рикошет)
-                                vehicle.askRepair((ushort)damageTaken);
-                                VehicleManager.sendVehicleHealth(vehicle, vehicle.health);
-                                ModuleDamageHandler.SendChat(vehicle, "[СИСТЕМА] РИКОШЕТ! Броня не пробита.", Color.green);
-                            }
-                            // 4. Иначе проверяем на критические повреждения
-                            else if (damageTaken >= Configuration.Instance.MinDamageForCrit)
-                            {
-                                ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
-                            }
+                            ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
                         }
-
-                        // Сброс состояний при полной починке
-                        if (vehicle.health == vehicle.asset.health && vehicle.health > state.LastHealth)
-                        {
-                            ResetVehicleEffects(state);
-                        }
-
-                        // Применение постоянных эффектов (например, Стан или Поломка трансмиссии)
-                        ApplyActiveEffects(vehicle, state);
-
-                        state.LastHealth = vehicle.health;
                     }
-                }
-                catch (Exception ex)
-                {
-                    Rocket.Core.Logging.Logger.LogError("[VehicleModules] Ошибка цикла: " + ex.Message);
-                }
 
+                    // АКТИВНЫЕ ЭФФЕКТЫ
+                    if (state.IsStunned)
+                    {
+                        var rb = vehicle.GetComponent<Rigidbody>();
+                        if (rb != null) { rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero; }
+                    }
+
+                    if (state.IsTransmissionBroken && vehicle.batteryCharge > 0)
+                    {
+                        vehicle.batteryCharge = 0;
+                        VehicleManager.sendVehicleFuel(vehicle, vehicle.fuel);
+                    }
+
+                    state.LastHealth = vehicle.health;
+                }
                 yield return new WaitForSeconds(0.5f);
             }
         }
 
-        private void ApplyActiveEffects(InteractableVehicle vehicle, VehicleState state)
-        {
-            if (state.IsStunned)
-            {
-                var rb = vehicle.GetComponent<Rigidbody>();
-                if (rb != null) { rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero; }
-            }
-
-            if (state.IsTransmissionBroken && vehicle.batteryCharge > 0)
-            {
-                vehicle.batteryCharge = 0;
-                VehicleManager.sendVehicleFuel(vehicle, vehicle.fuel);
-            }
-        }
-
-        private void ResetVehicleEffects(VehicleState state)
-        {
-            state.IsFuelTankBroken = false;
-            state.IsTransmissionBroken = false;
-            state.IsGunBroken = false;
-            state.IsOnFire = false;
-            state.IsSmoking = false;
-            state.IsStunned = false;
-        }
-
-      public IEnumerator BandageRoutine(UnturnedPlayer player, ushort bandageId)
+        // ПОЛНОСТЬЮ ИСПРАВЛЕННЫЙ МЕТОД БИНТА (FIX CS7036)
+        public IEnumerator BandageRoutine(UnturnedPlayer player, ushort bandageId)
         {
             yield return new WaitForSeconds(Configuration.Instance.BandageUseTimeSeconds);
             
-            // Проверяем, что игрок все еще в машине и жив
             if (player != null && player.IsInVehicle && !player.Dead)
             {
-                // Ищем бинт по всем страницам инвентаря
                 var items = player.Inventory.search(bandageId, true, true);
                 if (items.Count > 0)
                 {
-                    // Получаем точные координаты первого найденного бинта
                     byte page = items[0].page;
                     byte x = items[0].jar.x;
                     byte y = items[0].jar.y;
-                    
-                    // Конвертируем координаты в индекс
                     byte index = player.Inventory.getIndex(page, x, y);
 
-                    // Удаляем предмет и лечим
                     player.Inventory.removeItem(page, index);
                     player.Player.life.askHeal(Configuration.Instance.BandageHealAmount, true, true);
-                    UnturnedChat.Say(player, ">> ПЕРЕВЯЗКА ЭКИПАЖА ЗАВЕРШЕНА <<", Color.green);
-                }
-                else
-                {
-                    UnturnedChat.Say(player, "[ОШИБКА] Бинт не найден в инвентаре!", Color.red);
+                    UnturnedChat.Say(player, "Вы перевязали раны экипажа.", Color.green);
                 }
             }
-        }   
+        }
     }
 }
