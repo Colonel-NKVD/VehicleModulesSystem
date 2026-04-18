@@ -38,6 +38,9 @@ namespace VehicleModulesSystem
 
             UnturnedPlayerEvents.OnPlayerDeath += OnPlayerDeath;
             
+            // --- ПОДПИСКА НА СОБЫТИЕ УРОНА ---
+            VehicleManager.onDamageVehicleRequested += OnDamageVehicleRequested;
+            
             if (Configuration.Instance.AllowedVehicleIds == null)
             {
                 Configuration.Instance.AllowedVehicleIds = new List<ushort>();
@@ -54,6 +57,10 @@ namespace VehicleModulesSystem
                 harmony.UnpatchAll(HarmonyInstanceId);
             }
             UnturnedPlayerEvents.OnPlayerDeath -= OnPlayerDeath;
+            
+            // --- ОТПИСКА ОТ СОБЫТИЯ УРОНА ---
+            VehicleManager.onDamageVehicleRequested -= OnDamageVehicleRequested;
+            
             StopAllCoroutines();
             TrackedVehicles.Clear();
         }
@@ -97,6 +104,43 @@ namespace VehicleModulesSystem
             }
         }
 
+        // ====================================================================
+        // НАДЕЖНАЯ СИСТЕМА ФИКСАЦИИ УРОНА (РАБОТАЕТ МГНОВЕННО ПРИ ПОПАДАНИИ)
+        // ====================================================================
+        private void OnDamageVehicleRequested(CSteamID instigatorSteamID, InteractableVehicle vehicle, ref ushort pendingTotalDamage, ref bool canDamage, ref bool shouldAllow, EDamageOrigin damageOrigin)
+        {
+            if (vehicle == null || vehicle.asset == null || !canDamage || !shouldAllow || pendingTotalDamage == 0) return;
+
+            ushort vId = vehicle.asset.id;
+
+            if (!Configuration.Instance.AllowedVehicleIds.Contains(vId)) return;
+
+            VehicleState state = GetVehicleState(vehicle);
+            float maxHealth = vehicle.asset.health;
+            int damageTaken = pendingTotalDamage;
+
+            Rocket.Core.Logging.Logger.Log($"[EVENT-TRIGGER] Попадание по {vehicle.asset.vehicleName} ({vId}). Потенциальный урон: {damageTaken}");
+
+            if (damageTaken < (maxHealth * 0.20f) && UnityEngine.Random.value < Configuration.Instance.ChanceDeflect)
+            {
+                shouldAllow = false; // Блокируем ванильный урон
+                pendingTotalDamage = 0;
+                ModuleDamageHandler.SendChat(vehicle, "[СИСТЕМА] РИКОШЕТ! Броня не пробита.", Color.green);
+                Rocket.Core.Logging.Logger.Log($"[EVENT-DEFLECT] Рикошет сработал для {vId}. Урон аннулирован.");
+                return;
+            }
+
+            if (damageTaken >= Configuration.Instance.MinDamageForCrit) 
+            {
+                Rocket.Core.Logging.Logger.Log($"[EVENT-CRIT] Урон ({damageTaken}) выше порога. Обрабатываем модули.");
+                ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона!", Color.yellow);
+                ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
+            }
+        }
+
+        // ====================================================================
+        // ПОТОК ДЛЯ ПОДДЕРЖАНИЯ ЭФФЕКТОВ (Дым, Стан, Движок, Фикс ХП)
+        // ====================================================================
         private IEnumerator VehicleHealthWatcher()
         {
             Rocket.Core.Logging.Logger.Log("[SENSOR-DEBUG] Поток датчика успешно запущен.");
@@ -140,32 +184,8 @@ namespace VehicleModulesSystem
 
                         VehicleState state = GetVehicleState(vehicle);
 
-                        // --- ПРОВЕРКА ПОЛУЧЕНИЯ УРОНА ---
-                        if (vehicle.health < state.LastHealth)
-                        {
-                            int damageTaken = state.LastHealth - vehicle.health;
-                            float maxHealth = vehicle.asset.health;
-
-                            // ДИАГНОСТИКА: Этот лог покажет, видит ли плагин удар вообще
-                            Rocket.Core.Logging.Logger.Log($"[SENSOR-TRIGGER] {vehicle.asset.vehicleName} ({vId}) получил {damageTaken} урона. (Порог: {Configuration.Instance.MinDamageForCrit})");
-
-                            // 1. Проверка на рикошет (если урон < 20% от макс ХП)
-                            if (damageTaken < (maxHealth * 0.20f) && UnityEngine.Random.value < Configuration.Instance.ChanceDeflect)
-                            {
-                                vehicle.askRepair((ushort)damageTaken);
-                                VehicleManager.sendVehicleHealth(vehicle, vehicle.health);
-                                ModuleDamageHandler.SendChat(vehicle, "[СИСТЕМА] РИКОШЕТ! Броня не пробита.", Color.green);
-                            }
-                            // 2. Проверка на Крит
-                            else if (damageTaken >= Configuration.Instance.MinDamageForCrit) 
-                            {
-                                Rocket.Core.Logging.Logger.Log($"[SENSOR-CRIT-CALL] Урон выше порога. Вызываю ProcessDamage для {vId}");
-                                ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона!", Color.yellow);
-                                ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
-                            }
-                        }
                         // Сброс состояний при полной починке
-                        else if (vehicle.health > state.LastHealth && vehicle.health == vehicle.asset.health)
+                        if (vehicle.health > state.LastHealth && vehicle.health == vehicle.asset.health)
                         {
                             state.IsTransmissionBroken = false;
                             state.IsFuelTankBroken = false;
