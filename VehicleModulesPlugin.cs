@@ -8,6 +8,7 @@ using Rocket.Unturned.Events;
 using Rocket.Unturned.Player;
 using SDG.Unturned;
 using UnityEngine;
+using Logger = Rocket.Core.Logging.Logger; // Для удобства
 
 namespace VehicleModulesSystem
 {
@@ -34,16 +35,18 @@ namespace VehicleModulesSystem
             Instance = this;
             UnturnedPlayerEvents.OnPlayerDeath += OnPlayerDeath;
             
-            // Проверка на случай, если конфиг не загрузился корректно
-            if (Configuration.Instance.AllowedVehicleIds == null)
+            if (Configuration.Instance.AllowedVehicleIds == null || Configuration.Instance.AllowedVehicleIds.Count == 0)
             {
-                Configuration.Instance.AllowedVehicleIds = new List<ushort>();
+                Logger.LogWarning("[OBSERVER] Список AllowedVehicleIds пуст! Плагин не будет обрабатывать технику.");
+            }
+            else 
+            {
+                Logger.Log($"[OBSERVER] Загружено ID техники: {Configuration.Instance.AllowedVehicleIds.Count}");
             }
             
-            Rocket.Core.Logging.Logger.Log("================================================");
-            Rocket.Core.Logging.Logger.Log("--- [OBSERVER] Система мониторинга запущена ---");
-            Rocket.Core.Logging.Logger.Log("--- Протокол: Дизельпанк / Grimdark 1917+ ---");
-            Rocket.Core.Logging.Logger.Log("================================================");
+            Logger.Log("================================================");
+            Logger.Log("--- [OBSERVER] Система мониторинга запущена ---");
+            Logger.Log("================================================");
             
             StartCoroutine(VehicleHealthWatcher());
         }
@@ -53,7 +56,7 @@ namespace VehicleModulesSystem
             UnturnedPlayerEvents.OnPlayerDeath -= OnPlayerDeath;
             StopAllCoroutines();
             TrackedVehicles.Clear();
-            Rocket.Core.Logging.Logger.Log("[OBSERVER] Система аварийно остановлена.");
+            Logger.Log("[OBSERVER] Система остановлена.");
         }
 
         public VehicleState GetVehicleState(InteractableVehicle v)
@@ -63,33 +66,32 @@ namespace VehicleModulesSystem
             {
                 state = new VehicleState { InstanceID = v.instanceID, LastHealth = v.health };
                 TrackedVehicles.Add(v.instanceID, state);
+                // Лог для отладки отслеживания
+                Logger.Log($"[DEBUG] Начато отслеживание техники: {v.asset.name} (ID: {v.id})");
             }
             return state;
         }
 
         private void OnPlayerDeath(UnturnedPlayer player, EDeathCause cause, ELimb limb, Steamworks.CSteamID murderer)
         {
-            if (player != null && player.Player != null)
-            {
+            if (player?.Player != null)
                 player.Player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
-            }
         }
 
         private IEnumerator VehicleHealthWatcher()
         {
-            yield return new WaitForSeconds(3.0f);
+            yield return new WaitForSeconds(1.0f);
             while (true)
             {
                 if (VehicleManager.vehicles == null) { yield return new WaitForSeconds(1.0f); continue; }
 
-                // Извлечение списка один раз за итерацию для безопасности
                 var allowedIds = Configuration.Instance?.AllowedVehicleIds;
 
                 for (int i = VehicleManager.vehicles.Count - 1; i >= 0; i--)
                 {
                     var vehicle = VehicleManager.vehicles[i];
                     
-                    // Улучшенная проверка: игнорируем, если машины нет, она взорвана или её ID нет в списке
+                    // Если техника не в списке или уничтожена — убираем из трекера
                     if (vehicle == null || vehicle.isExploded || allowedIds == null || !allowedIds.Contains(vehicle.id)) 
                     {
                         if (vehicle != null && TrackedVehicles.ContainsKey(vehicle.instanceID))
@@ -99,13 +101,19 @@ namespace VehicleModulesSystem
 
                     VehicleState state = GetVehicleState(vehicle);
 
+                    // Детекция урона
                     if (vehicle.health < state.LastHealth)
                     {
                         int damageTaken = state.LastHealth - vehicle.health;
-                        ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона! Состояние: {vehicle.health}/{vehicle.asset.health}", Color.yellow);
+                        
+                        // ЛОГ В КОНСОЛЬ (теперь ты увидишь это без захода в танк)
+                        Logger.Log($"[DAMAGE] Техника {vehicle.id} получила {damageTaken} урона. HP: {vehicle.health}/{vehicle.asset.health}");
+                        
+                        ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона!", Color.yellow);
                         ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
                     }
 
+                    // Логика блокировки движения при контузии
                     if (state.IsStunned)
                     {
                         var rb = vehicle.GetComponent<Rigidbody>();
@@ -116,10 +124,11 @@ namespace VehicleModulesSystem
                         }
                     }
 
+                    // Логика поломки трансмиссии (постоянный разряд батареи)
                     if (state.IsTransmissionBroken && vehicle.batteryCharge > 0)
                     {
                         vehicle.batteryCharge = 0;
-                        VehicleManager.sendVehicleFuel(vehicle, vehicle.fuel);
+                        VehicleManager.sendVehicleBattery(vehicle, 0); // Исправлено: синхронизация именно батареи
                     }
 
                     state.LastHealth = vehicle.health;
