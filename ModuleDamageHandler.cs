@@ -4,6 +4,7 @@ using SDG.Unturned;
 using UnityEngine;
 using Rocket.Unturned.Chat;
 using Steamworks;
+using Logger = Rocket.Core.Logging.Logger;
 
 namespace VehicleModulesSystem
 {
@@ -14,25 +15,31 @@ namespace VehicleModulesSystem
             var cfg = VehicleModulesPlugin.Instance.Configuration.Instance;
             if (s.IsOnFire) return;
 
-            // 1. Проверка на рикошет (если урон очень мал относительно брони техники)
+            // 1. Рикошет
             float maxHealth = v.asset.health;
             if (dmg < (maxHealth * cfg.RicochetThresholdPercent))
             {
                 if (Random.value < cfg.RicochetChance)
                 {
+                    Logger.Log($"[HIT] Рикошет по технике {v.id} (урон {dmg})");
                     SendChat(v, ">>> РИКОШЕТ / БРОНЯ НЕ ПРОБИТА <<<", Color.white);
                     return; 
                 }
             }
 
-            // 2. Минимальный порог урона для критических повреждений
-            if (dmg < cfg.MinDamageForCritical) return;
+            // 2. Минимальный урон для крита
+            if (dmg < cfg.MinDamageForCritical) 
+            {
+                Logger.Log($"[HIT] Урон {dmg} ниже порога крита ({cfg.MinDamageForCritical})");
+                return;
+            }
 
             float intensity = Mathf.Clamp(dmg / 1500f, 0f, 0.25f); 
 
-            // Контузия экипажа (общий шанс)
+            // Контузия экипажа
             if (!s.IsStunned && Random.value < (0.10f + intensity))
             {
+                Logger.Log($"[CRIT] Контузия экипажа техники {v.id}");
                 VehicleModulesPlugin.Instance.StartCoroutine(StunRoutine(v, s, 5));
             }
 
@@ -44,6 +51,7 @@ namespace VehicleModulesSystem
                 () => {
                     if (!s.IsFuelTankBroken && Random.value < (cfg.ChanceFuelLeak + intensity)) {
                         s.IsFuelTankBroken = true;
+                        Logger.Log($"[CRIT] Пробит бак техники {v.id}");
                         SendChat(v, "!!! КРИТ: Пробит топливный бак !!!", Color.red);
                         VehicleModulesPlugin.Instance.StartCoroutine(FuelRoutine(v, s));
                         criticalsThisHit++;
@@ -51,7 +59,8 @@ namespace VehicleModulesSystem
                 },
                 () => {
                     if (!s.IsTransmissionBroken && Random.value < (cfg.ChanceTransmission + intensity)) {
-                        s.IsTransmissionBroken = true; // Сразу ставим статус
+                        s.IsTransmissionBroken = true;
+                        Logger.Log($"[CRIT] Поломка трансмиссии техники {v.id}");
                         SendChat(v, "[СИСТЕМА] Трансмиссия повреждена!", Color.yellow);
                         VehicleModulesPlugin.Instance.StartCoroutine(TransRoutine(v, s));
                         criticalsThisHit++;
@@ -62,16 +71,15 @@ namespace VehicleModulesSystem
                         if (Random.value < 0.25f) ExplodeBreach(v);
                     } else if (Random.value < (cfg.ChanceGunBroken + intensity)) {
                         s.IsGunBroken = true;
+                        Logger.Log($"[CRIT] Заклинило орудие техники {v.id}");
                         SendChat(v, "[СИСТЕМА] Орудие заклинило!", Color.red);
-                        
-                        // 4. КОНТУЗИЯ 3-ГО МЕСТА (Индекс 2) на 15 секунд
-                        ApplySeatStun(v, 2, 15f); 
+                        ApplySeatStun(v, 2, 15f); // Seat 3 (Index 2)
                         criticalsThisHit++;
                     }
                 }
             };
 
-            // Перемешивание и выполнение
+            // Перемешивание и выполнение проверок
             for (int i = 0; i < moduleChecks.Count; i++) {
                 int randomIndex = Random.Range(i, moduleChecks.Count);
                 var temp = moduleChecks[i];
@@ -87,14 +95,37 @@ namespace VehicleModulesSystem
             // Пожар и Дым
             if (!s.IsOnFire && Random.value < (0.03f + (intensity * 0.5f)))
             {
+                Logger.Log($"[CRIT] Пожар в технике {v.id}");
                 SendChat(v, "!!! ПОЖАР В БОЕВОМ ОТДЕЛЕНИИ !!!", Color.red);
                 VehicleModulesPlugin.Instance.StartCoroutine(FireRoutine(v, s));
             }
             else if (!s.IsSmoking && Random.value < (cfg.ChanceSmoke + intensity))
             {
+                Logger.Log($"[CRIT] Задымление в технике {v.id}");
                 SendChat(v, "[ВНИМАНИЕ] Задымление боевого отделения!", Color.gray);
                 VehicleModulesPlugin.Instance.StartCoroutine(SmokeRoutine(v, s));
             }
+        }
+
+        // --- Исправленный метод синхронизации батареи ---
+        private static IEnumerator TransRoutine(InteractableVehicle v, VehicleState s)
+        {
+            yield return new WaitForSeconds(Random.Range(5, 10));
+            if (v != null && s.IsTransmissionBroken)
+            {
+                v.batteryCharge = 0;
+                VehicleManager.sendVehicleBattery(v, 0); // Синхронизируем именно батарею
+            }
+        }
+        
+        // Вспомогательные методы остаются без изменений (SendChat, ApplySeatStun и т.д.)
+        // ...
+        
+        public static void SendChat(InteractableVehicle v, string msg, Color c)
+        {
+            if (v?.passengers == null) return;
+            foreach (var p in v.passengers)
+                if (p?.player != null) UnturnedChat.Say(p.player.playerID.steamID, msg, c);
         }
 
         private static void ApplySeatStun(InteractableVehicle v, int seatIndex, float duration)
@@ -128,7 +159,6 @@ namespace VehicleModulesSystem
                 {
                     if (p.player != null)
                     {
-                        // 5. Урон + UI Эффект задымления
                         p.player.player.life.askDamage(2, Vector3.up, EDeathCause.BREATH, ELimb.SPINE, CSteamID.Nil, out EPlayerKill kill);
                         EffectManager.sendUIEffect(cfg.SmokeUIEffectID, 12345, p.player.playerID.steamID, true);
                     }
@@ -164,7 +194,6 @@ namespace VehicleModulesSystem
             v.askRepair(v.asset.health);
             VehicleManager.sendVehicleHealth(v, v.health);
             
-            // 1. Ремонт трансмиссии, если включено в конфиге
             if (cfg.RepairFixesTransmission) s.IsTransmissionBroken = false;
 
             s.IsFuelTankBroken = false;
@@ -175,15 +204,6 @@ namespace VehicleModulesSystem
             s.IsRepairing = false;
             
             SendChat(v, ">> ТЕХНИКА ВОССТАНОВЛЕНА <<", Color.green);
-        }
-
-        // Остальные методы (FireRoutine, StunRoutine, FuelRoutine и т.д.) остаются как в твоем исходнике
-        // ... (пропускаю для краткости, они не менялись принципиально) ...
-
-        public static void SendChat(InteractableVehicle v, string msg, Color c)
-        {
-            foreach (var p in v.passengers)
-                if (p.player != null) UnturnedChat.Say(p.player.playerID.steamID, msg, c);
         }
 
         public static bool IsNearRepairStation(Vector3 position, ushort targetId, float radius)
@@ -227,16 +247,6 @@ namespace VehicleModulesSystem
                 v.fuel = (ushort)Mathf.Max(0, v.fuel - 35);
                 VehicleManager.sendVehicleFuel(v, v.fuel);
                 yield return new WaitForSeconds(1.0f);
-            }
-        }
-
-        private static IEnumerator TransRoutine(InteractableVehicle v, VehicleState s)
-        {
-            yield return new WaitForSeconds(Random.Range(5, 10));
-            if (v != null && s.IsTransmissionBroken)
-            {
-                v.batteryCharge = 0;
-                VehicleManager.sendVehicleFuel(v, v.fuel); 
             }
         }
 
