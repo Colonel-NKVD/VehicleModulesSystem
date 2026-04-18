@@ -104,76 +104,119 @@ namespace VehicleModulesSystem
 
         private IEnumerator VehicleHealthWatcher()
         {
+            Rocket.Core.Logging.Logger.Log("[SENSOR-DEBUG] Поток датчика успешно запущен. Ожидание транспорта...");
             yield return new WaitForSeconds(3.0f);
+            
+            int tickCounter = 0;
+
             while (true)
             {
-                if (VehicleManager.vehicles == null) { yield return new WaitForSeconds(1.0f); continue; }
-
-                for (int i = VehicleManager.vehicles.Count - 1; i >= 0; i--)
+                try
                 {
-                    var vehicle = VehicleManager.vehicles[i];
-                    
-                    if (vehicle == null || vehicle.isExploded || !Configuration.Instance.AllowedVehicleIds.Contains(vehicle.id)) 
-                    {
-                        if (vehicle != null && TrackedVehicles.ContainsKey(vehicle.instanceID))
-                            TrackedVehicles.Remove(vehicle.instanceID);
-                        continue;
+                    if (VehicleManager.vehicles == null) 
+                    { 
+                        yield return new WaitForSeconds(1.0f); 
+                        continue; 
                     }
 
-                    VehicleState state = GetVehicleState(vehicle);
-
-                    if (vehicle.health < state.LastHealth)
+                    // Пульс датчика: каждые 10 секунд пишем в консоль, чтобы доказать, что корутина жива
+                    tickCounter++;
+                    if (tickCounter >= 20) 
                     {
-                        int damageTaken = state.LastHealth - vehicle.health;
-                        float maxHealth = vehicle.asset.health;
+                        Rocket.Core.Logging.Logger.Log($"[SENSOR-HEARTBEAT] Датчик активен. Машин на сервере: {VehicleManager.vehicles.Count}. В вайтлисте: {Configuration.Instance.AllowedVehicleIds.Count}");
+                        tickCounter = 0;
+                    }
 
-                        if (damageTaken < (maxHealth * 0.20f) && UnityEngine.Random.value < Configuration.Instance.ChanceDeflect)
+                    for (int i = VehicleManager.vehicles.Count - 1; i >= 0; i--)
+                    {
+                        var vehicle = VehicleManager.vehicles[i];
+                        
+                        // Пропускаем пустышки
+                        if (vehicle == null || vehicle.asset == null) continue;
+
+                        ushort vId = vehicle.asset.id;
+
+                        // ФИЛЬТР: Датчик работает ТОЛЬКО с техникой из AllowedVehicleIds
+                        if (vehicle.isExploded || !Configuration.Instance.AllowedVehicleIds.Contains(vId)) 
                         {
-                            vehicle.askRepair((ushort)damageTaken);
-                            VehicleManager.sendVehicleHealth(vehicle, vehicle.health);
-                            ModuleDamageHandler.SendChat(vehicle, "[СИСТЕМА] РИКОШЕТ! Броня не пробита.", Color.green);
+                            if (TrackedVehicles.ContainsKey(vehicle.instanceID))
+                                TrackedVehicles.Remove(vehicle.instanceID);
+                            continue;
                         }
-                        else if (damageTaken >= Configuration.Instance.MinDamageForCrit) 
+
+                        // === С ЭТОГО МОМЕНТА ДАТЧИК СМОТРИТ ТОЛЬКО НА РАЗРЕШЕННУЮ ТЕХНИКУ ===
+                        VehicleState state = GetVehicleState(vehicle);
+
+                        if (vehicle.health < state.LastHealth)
                         {
-                            ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона! Состояние: {vehicle.health}/{maxHealth}", Color.yellow);
-                            ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
+                            int damageTaken = state.LastHealth - vehicle.health;
+                            float maxHealth = vehicle.asset.health;
+
+                            // ЖЕСТКИЙ ДЕБАГ ТОЛЬКО ПРИ ПОЛУЧЕНИИ УРОНА
+                            Rocket.Core.Logging.Logger.Log($"[SENSOR-TRIGGER] Техника {vId} (Instance: {vehicle.instanceID}) получила УРОН: {damageTaken}! (Здоровье: {state.LastHealth} -> {vehicle.health})");
+
+                            if (damageTaken < (maxHealth * 0.20f) && UnityEngine.Random.value < Configuration.Instance.ChanceDeflect)
+                            {
+                                vehicle.askRepair((ushort)damageTaken);
+                                VehicleManager.sendVehicleHealth(vehicle, vehicle.health);
+                                ModuleDamageHandler.SendChat(vehicle, "[СИСТЕМА] РИКОШЕТ! Броня не пробита.", Color.green);
+                                Rocket.Core.Logging.Logger.Log($"[SENSOR-DEBUG] Урон по технике {vId} ушел в РИКОШЕТ.");
+                            }
+                            else if (damageTaken >= Configuration.Instance.MinDamageForCrit) 
+                            {
+                                Rocket.Core.Logging.Logger.Log($"[SENSOR-DEBUG] Урон по технике {vId} преодолел порог. Запуск просчета критов.");
+                                ModuleDamageHandler.SendChat(vehicle, $"[ДАТЧИК] Получено {damageTaken} ед. урона! Состояние: {vehicle.health}/{maxHealth}", Color.yellow);
+                                ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
+                            }
+                            else
+                            {
+                                Rocket.Core.Logging.Logger.Log($"[SENSOR-DEBUG] Урон {damageTaken} по технике {vId} слишком мал для крита (Мин. порог: {Configuration.Instance.MinDamageForCrit}).");
+                            }
                         }
-                    }
-                    else if (vehicle.health > state.LastHealth && vehicle.health == vehicle.asset.health)
-                    {
-                        state.IsTransmissionBroken = false;
-                        state.IsFuelTankBroken = false;
-                        state.IsGunBroken = false;
-                        state.IsOnFire = false;
-                        state.IsSmoking = false;
-                        state.IsStunned = false;
-                    }
-
-                    if (state.IsStunned)
-                    {
-                        var rb = vehicle.GetComponent<Rigidbody>();
-                        if (rb != null) 
-                        { 
-                            rb.velocity = Vector3.zero; 
-                            rb.angularVelocity = Vector3.zero; 
+                        else if (vehicle.health > state.LastHealth && vehicle.health == vehicle.asset.health)
+                        {
+                            state.IsTransmissionBroken = false;
+                            state.IsFuelTankBroken = false;
+                            state.IsGunBroken = false;
+                            state.IsOnFire = false;
+                            state.IsSmoking = false;
+                            state.IsStunned = false;
+                            Rocket.Core.Logging.Logger.Log($"[SENSOR-DEBUG] Техника {vId} полностью отремонтирована. Модули восстановлены.");
                         }
-                    }
 
-                    if (state.IsSmoking)
-                    {
-                        EffectManager.sendEffect(36009, 128, vehicle.transform.position + Vector3.up * 1.5f);
-                    }
+                        if (state.IsStunned)
+                        {
+                            var rb = vehicle.GetComponent<Rigidbody>();
+                            if (rb != null) 
+                            { 
+                                rb.velocity = Vector3.zero; 
+                                rb.angularVelocity = Vector3.zero; 
+                            }
+                        }
 
-                    // --- ИСПРАВЛЕНИЕ АПИ UNTURNED (CS0117 FIX) ---
-                    // Глушим машину батареей, а синхронизируем пакетом топлива как в старой стабильной сборке
-                    if (state.IsTransmissionBroken && vehicle.batteryCharge > 0)
-                    {
-                        vehicle.batteryCharge = 0;
-                        VehicleManager.sendVehicleFuel(vehicle, vehicle.fuel); 
-                    }
+                        if (state.IsSmoking)
+                        {
+                            EffectManager.sendEffect(36009, 128, vehicle.transform.position + Vector3.up * 1.5f);
+                        }
 
-                    state.LastHealth = vehicle.health;
+                        // --- ИСПРАВЛЕНИЕ АПИ UNTURNED (CS0117 FIX) ---
+                        // Глушим машину батареей, а синхронизируем пакетом топлива как в старой стабильной сборке
+                        if (state.IsTransmissionBroken && vehicle.batteryCharge > 0)
+                        {
+                            vehicle.batteryCharge = 0;
+                            VehicleManager.sendVehicleFuel(vehicle, vehicle.fuel); 
+                        }
+
+                        state.LastHealth = vehicle.health;
+                    }
                 }
+                catch (Exception ex)
+                {
+                    // ЕСЛИ ЧТО-ТО ПОШЛО НЕ ТАК - МЫ УВИДИМ ЭТО, А ДАТЧИК НЕ УМРЕТ
+                    Rocket.Core.Logging.Logger.LogError("[SENSOR-CRITICAL] Ошибка в цикле датчика: " + ex.Message);
+                    Rocket.Core.Logging.Logger.LogError(ex.StackTrace);
+                }
+                
                 yield return new WaitForSeconds(0.5f);
             }
         }
