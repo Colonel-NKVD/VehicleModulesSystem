@@ -31,15 +31,25 @@ namespace VehicleModulesSystem
 
         protected override void Load()
         {
+            // ПАТЧ: Принудительный вывод в консоль до любых действий
+            Console.WriteLine("!!! [DEBUG] VEHICLE_MODULES: STARTING LOAD !!!");
+            
             Instance = this;
             
-            // Прямой вызов через полный путь, чтобы точно сработало
+            // Если вы не видите эту строку в консоли сервера, 
+            // значит файл .dll не находится в нужной папке или не подгружается.
             Rocket.Core.Logging.Logger.Log("================================================");
             Rocket.Core.Logging.Logger.Log("--- [OBSERVER] Попытка запуска системы ---");
 
             try 
             {
                 UnturnedPlayerEvents.OnPlayerDeath += OnPlayerDeath;
+
+                // Добавлена проверка на инициализацию менеджера
+                if (VehicleManager.vehicles == null)
+                {
+                    Rocket.Core.Logging.Logger.LogWarning("[OBSERVER] VehicleManager еще не инициализирован, ожидаем...");
+                }
 
                 if (Configuration.Instance.AllowedVehicleIds == null)
                 {
@@ -54,7 +64,8 @@ namespace VehicleModulesSystem
             }
             catch (Exception ex)
             {
-                Rocket.Core.Logging.Logger.LogError($"[OBSERVER] Ошибка при загрузке: {ex.Message}");
+                // Если тут ошибка, она гарантированно попадет в Rocket.log
+                Rocket.Core.Logging.Logger.LogError($"[OBSERVER] КРИТИЧЕСКАЯ ОШИБКА ПРИ ЗАГРУЗКЕ: {ex.ToString()}");
             }
 
             Rocket.Core.Logging.Logger.Log("================================================");
