@@ -128,7 +128,7 @@ namespace VehicleModulesSystem
                     if (state.IsTransmissionBroken && vehicle.batteryCharge > 0)
                     {
                         vehicle.batteryCharge = 0;
-                        VehicleManager.sendVehicleBattery(vehicle, 0); // Исправлено: синхронизация именно батареи
+                        VehicleManager.sendVehicleBatteryCharge(vehicle, 0); // Исправлено: синхронизация именно батареи
                     }
 
                     state.LastHealth = vehicle.health;
