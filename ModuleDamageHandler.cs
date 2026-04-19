@@ -12,6 +12,8 @@ namespace VehicleModulesSystem
     {
         public static void ProcessDamage(InteractableVehicle v, VehicleState s, int dmg)
         {
+            if (v == null || v.asset == null || s == null) return;
+            
             var cfg = VehicleModulesPlugin.Instance.Configuration.Instance;
             if (s.IsOnFire) return;
 
@@ -21,7 +23,7 @@ namespace VehicleModulesSystem
             {
                 if (Random.value < cfg.RicochetChance)
                 {
-                    Logger.Log($"[HIT] Рикошет по технике {v.id} (урон {dmg})");
+                    Logger.Log($"[HIT] Рикошет по {v.asset.name} (урон {dmg})");
                     SendChat(v, ">>> РИКОШЕТ / БРОНЯ НЕ ПРОБИТА <<<", Color.white);
                     return; 
                 }
@@ -39,7 +41,7 @@ namespace VehicleModulesSystem
             // Контузия экипажа
             if (!s.IsStunned && Random.value < (0.10f + intensity))
             {
-                Logger.Log($"[CRIT] Контузия экипажа техники {v.id}");
+                Logger.Log($"[CRIT] Контузия экипажа {v.asset.name}");
                 VehicleModulesPlugin.Instance.StartCoroutine(StunRoutine(v, s, 5));
             }
 
@@ -51,7 +53,7 @@ namespace VehicleModulesSystem
                 () => {
                     if (!s.IsFuelTankBroken && Random.value < (cfg.ChanceFuelLeak + intensity)) {
                         s.IsFuelTankBroken = true;
-                        Logger.Log($"[CRIT] Пробит бак техники {v.id}");
+                        Logger.Log($"[CRIT] Пробит бак {v.asset.name}");
                         SendChat(v, "!!! КРИТ: Пробит топливный бак !!!", Color.red);
                         VehicleModulesPlugin.Instance.StartCoroutine(FuelRoutine(v, s));
                         criticalsThisHit++;
@@ -60,7 +62,7 @@ namespace VehicleModulesSystem
                 () => {
                     if (!s.IsTransmissionBroken && Random.value < (cfg.ChanceTransmission + intensity)) {
                         s.IsTransmissionBroken = true;
-                        Logger.Log($"[CRIT] Поломка трансмиссии техники {v.id}");
+                        Logger.Log($"[CRIT] Поломка трансмиссии {v.asset.name}");
                         SendChat(v, "[СИСТЕМА] Трансмиссия повреждена!", Color.yellow);
                         VehicleModulesPlugin.Instance.StartCoroutine(TransRoutine(v, s));
                         criticalsThisHit++;
@@ -71,7 +73,7 @@ namespace VehicleModulesSystem
                         if (Random.value < 0.25f) ExplodeBreach(v);
                     } else if (Random.value < (cfg.ChanceGunBroken + intensity)) {
                         s.IsGunBroken = true;
-                        Logger.Log($"[CRIT] Заклинило орудие техники {v.id}");
+                        Logger.Log($"[CRIT] Заклинило орудие {v.asset.name}");
                         SendChat(v, "[СИСТЕМА] Орудие заклинило!", Color.red);
                         ApplySeatStun(v, 2, 15f); // Seat 3 (Index 2)
                         criticalsThisHit++;
@@ -79,7 +81,7 @@ namespace VehicleModulesSystem
                 }
             };
 
-            // Перемешивание и выполнение проверок
+            // Перемешивание
             for (int i = 0; i < moduleChecks.Count; i++) {
                 int randomIndex = Random.Range(i, moduleChecks.Count);
                 var temp = moduleChecks[i];
@@ -95,31 +97,27 @@ namespace VehicleModulesSystem
             // Пожар и Дым
             if (!s.IsOnFire && Random.value < (0.03f + (intensity * 0.5f)))
             {
-                Logger.Log($"[CRIT] Пожар в технике {v.id}");
+                Logger.Log($"[CRIT] Пожар в {v.asset.name}");
                 SendChat(v, "!!! ПОЖАР В БОЕВОМ ОТДЕЛЕНИИ !!!", Color.red);
                 VehicleModulesPlugin.Instance.StartCoroutine(FireRoutine(v, s));
             }
             else if (!s.IsSmoking && Random.value < (cfg.ChanceSmoke + intensity))
             {
-                Logger.Log($"[CRIT] Задымление в технике {v.id}");
+                Logger.Log($"[CRIT] Задымление в {v.asset.name}");
                 SendChat(v, "[ВНИМАНИЕ] Задымление боевого отделения!", Color.gray);
                 VehicleModulesPlugin.Instance.StartCoroutine(SmokeRoutine(v, s));
             }
         }
 
-        // --- Исправленный метод синхронизации батареи ---
         private static IEnumerator TransRoutine(InteractableVehicle v, VehicleState s)
         {
             yield return new WaitForSeconds(Random.Range(5, 10));
-            if (v != null && s.IsTransmissionBroken)
+            if (v != null && s.IsTransmissionBroken && !v.isExploded)
             {
                 v.batteryCharge = 0;
-                VehicleManager.sendVehicleBatteryCharge(v, 0); // Синхронизируем именно батарею
+                VehicleManager.sendVehicleBatteryCharge(v, 0); 
             }
         }
-        
-        // Вспомогательные методы остаются без изменений (SendChat, ApplySeatStun и т.д.)
-        // ...
         
         public static void SendChat(InteractableVehicle v, string msg, Color c)
         {
@@ -130,7 +128,7 @@ namespace VehicleModulesSystem
 
         private static void ApplySeatStun(InteractableVehicle v, int seatIndex, float duration)
         {
-            if (v.passengers.Length > seatIndex && v.passengers[seatIndex].player != null)
+            if (v?.passengers != null && v.passengers.Length > seatIndex && v.passengers[seatIndex].player != null)
             {
                 var p = v.passengers[seatIndex].player;
                 UnturnedChat.Say(p.playerID.steamID, ">> ВАС КОНТУЗИЛО ПРИ ПОВРЕЖДЕНИИ КАЗЕННИКА! <<", Color.yellow);
@@ -155,12 +153,15 @@ namespace VehicleModulesSystem
 
             while (s.IsSmoking && v != null && !v.isExploded && elapsed < duration)
             {
-                foreach (var p in v.passengers)
+                if (v.passengers != null)
                 {
-                    if (p.player != null)
+                    foreach (var p in v.passengers)
                     {
-                        p.player.player.life.askDamage(2, Vector3.up, EDeathCause.BREATH, ELimb.SPINE, CSteamID.Nil, out EPlayerKill kill);
-                        EffectManager.sendUIEffect(cfg.SmokeUIEffectID, 12345, p.player.playerID.steamID, true);
+                        if (p?.player != null)
+                        {
+                            p.player.player.life.askDamage(2, Vector3.up, EDeathCause.BREATH, ELimb.SPINE, CSteamID.Nil, out EPlayerKill kill);
+                            EffectManager.sendUIEffect(cfg.SmokeUIEffectID, 12345, p.player.playerID.steamID, true);
+                        }
                     }
                 }
                 yield return new WaitForSeconds(1.0f);
@@ -168,10 +169,10 @@ namespace VehicleModulesSystem
             }
             
             s.IsSmoking = false;
-            if (v != null)
+            if (v != null && !v.isExploded && v.passengers != null)
             {
                 foreach (var p in v.passengers)
-                    if (p.player != null) EffectManager.askEffectClearByID(cfg.SmokeUIEffectID, p.player.playerID.steamID);
+                    if (p?.player != null) EffectManager.askEffectClearByID(cfg.SmokeUIEffectID, p.player.playerID.steamID);
                 SendChat(v, "[СИСТЕМА] Боевое отделение проветрено.", Color.green);
             }
         }
@@ -221,13 +222,20 @@ namespace VehicleModulesSystem
         private static IEnumerator StunRoutine(InteractableVehicle v, VehicleState s, float time)
         {
             s.IsStunned = true;
-            foreach (var p in v.passengers)
-                if (p.player != null) p.player.player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, true);
-            yield return new WaitForSeconds(time);
-            if (v != null)
+            if (v?.passengers != null)
+            {
                 foreach (var p in v.passengers)
-                    if (p.player != null) p.player.player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
-            s.IsStunned = false;
+                    if (p?.player != null) p.player.player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, true);
+            }
+            
+            yield return new WaitForSeconds(time);
+            
+            if (v != null && !v.isExploded && v.passengers != null)
+            {
+                foreach (var p in v.passengers)
+                    if (p?.player != null) p.player.player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
+            }
+            if (s != null) s.IsStunned = false;
         }
 
         private static IEnumerator FireRoutine(InteractableVehicle v, VehicleState s)
@@ -252,6 +260,7 @@ namespace VehicleModulesSystem
 
         private static void ExplodeBreach(InteractableVehicle v)
         {
+            if (v == null || v.isExploded) return;
             EffectManager.sendEffect(45, 128, v.transform.position + Vector3.up * 2f);
             VehicleManager.damage(v, 1000, 1, false);
         }
