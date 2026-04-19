@@ -8,6 +8,7 @@ using Rocket.Unturned.Events;
 using Rocket.Unturned.Player;
 using SDG.Unturned;
 using UnityEngine;
+using Logger = Rocket.Core.Logging.Logger;
 
 namespace VehicleModulesSystem
 {
@@ -31,44 +32,43 @@ namespace VehicleModulesSystem
 
         protected override void Load()
         {
-            // ПАТЧ: Принудительный вывод в консоль до любых действий
-            Console.WriteLine("!!! [DEBUG] VEHICLE_MODULES: STARTING LOAD !!!");
-            
             Instance = this;
             
-            // Если вы не видите эту строку в консоли сервера, 
-            // значит файл .dll не находится в нужной папке или не подгружается.
-            Rocket.Core.Logging.Logger.Log("================================================");
-            Rocket.Core.Logging.Logger.Log("--- [OBSERVER] Попытка запуска системы ---");
+            Console.WriteLine("!!! [DEBUG] VEHICLE_MODULES_SYSTEM: STARTING LOAD !!!");
+            Logger.Log("================================================");
+            Logger.Log("--- [OBSERVER] Инициализация системы модулей ---");
 
             try 
             {
                 UnturnedPlayerEvents.OnPlayerDeath += OnPlayerDeath;
 
-                // Добавлена проверка на инициализацию менеджера
                 if (VehicleManager.vehicles == null)
-                {
-                    Rocket.Core.Logging.Logger.LogWarning("[OBSERVER] VehicleManager еще не инициализирован, ожидаем...");
-                }
+                    Logger.LogWarning("[OBSERVER] VehicleManager еще не инициализирован, ожидаем...");
 
-                if (Configuration.Instance.AllowedVehicleIds == null)
+                if (Configuration.Instance.AllowedVehicleIds == null || Configuration.Instance.AllowedVehicleIds.Count == 0)
                 {
                     Configuration.Instance.AllowedVehicleIds = new List<ushort>();
-                    Rocket.Core.Logging.Logger.LogWarning("[OBSERVER] Список ID пуст, создан новый список.");
+                    Logger.LogWarning("[OBSERVER] ВНИМАНИЕ: Список AllowedVehicleIds пуст! Плагин не будет обрабатывать технику.");
                 }
-
-                Rocket.Core.Logging.Logger.Log($"[OBSERVER] В списке разрешенных: {Configuration.Instance.AllowedVehicleIds.Count} ID.");
+                else
+                {
+                    Logger.Log($"[OBSERVER] Загружено разрешенных ID техники: {Configuration.Instance.AllowedVehicleIds.Count}");
+                    // Выводим все загруженные ID для дебага
+                    foreach(var id in Configuration.Instance.AllowedVehicleIds)
+                    {
+                        Logger.Log($"[OBSERVER] Взят на прицел ID: {id}");
+                    }
+                }
                 
                 StartCoroutine(VehicleHealthWatcher());
-                Rocket.Core.Logging.Logger.Log("[OBSERVER] Корутина мониторинга запущена успешно.");
+                Logger.Log("[OBSERVER] Корутина мониторинга запущена успешно.");
             }
             catch (Exception ex)
             {
-                // Если тут ошибка, она гарантированно попадет в Rocket.log
-                Rocket.Core.Logging.Logger.LogError($"[OBSERVER] КРИТИЧЕСКАЯ ОШИБКА ПРИ ЗАГРУЗКЕ: {ex.ToString()}");
+                Logger.LogError($"[OBSERVER] КРИТИЧЕСКАЯ ОШИБКА ПРИ ЗАГРУЗКЕ: {ex.Message}");
             }
 
-            Rocket.Core.Logging.Logger.Log("================================================");
+            Logger.Log("================================================");
         }
 
         protected override void Unload()
@@ -76,7 +76,7 @@ namespace VehicleModulesSystem
             UnturnedPlayerEvents.OnPlayerDeath -= OnPlayerDeath;
             StopAllCoroutines();
             TrackedVehicles.Clear();
-            Rocket.Core.Logging.Logger.Log("[OBSERVER] Плагин выгружен.");
+            Logger.Log("[OBSERVER] Плагин успешно выгружен.");
         }
 
         public VehicleState GetVehicleState(InteractableVehicle v)
@@ -86,7 +86,7 @@ namespace VehicleModulesSystem
             {
                 state = new VehicleState { InstanceID = v.instanceID, LastHealth = v.health };
                 TrackedVehicles.Add(v.instanceID, state);
-                Rocket.Core.Logging.Logger.Log($"[DEBUG] Новая цель: {v.asset.name} ({v.id}) | Instance: {v.instanceID}");
+                Logger.Log($"[DEBUG] Новая цель в трекере: {v.asset.name} (ID: {v.asset.id}) | Instance: {v.instanceID}");
             }
             return state;
         }
@@ -99,9 +99,8 @@ namespace VehicleModulesSystem
 
         private IEnumerator VehicleHealthWatcher()
         {
-            // Ждем чуть дольше перед началом, чтобы мир прогрузился
             yield return new WaitForSeconds(3.0f);
-            Rocket.Core.Logging.Logger.Log("[OBSERVER] Цикл проверки здоровья запущен.");
+            Logger.Log("[OBSERVER] Рабочий цикл проверки состояния запущен.");
 
             while (true)
             {
@@ -113,50 +112,71 @@ namespace VehicleModulesSystem
 
                     for (int i = VehicleManager.vehicles.Count - 1; i >= 0; i--)
                     {
-                        var vehicle = VehicleManager.vehicles[i];
-                        
-                        // Проверка на null и нахождение в списке
-                        if (vehicle == null || vehicle.isExploded) continue;
-                        
-                        if (!allowedIds.Contains(vehicle.id)) 
+                        // Внутренний try-catch: если одна машина забагована, остальные продолжат проверяться
+                        try 
                         {
-                            // Если машина была в трекере, но теперь не подходит (например, взорвана или конфиг сменился)
-                            if (TrackedVehicles.ContainsKey(vehicle.instanceID))
-                                TrackedVehicles.Remove(vehicle.instanceID);
-                            continue;
-                        }
-
-                        VehicleState state = GetVehicleState(vehicle);
-
-                        // Детекция урона
-                        if (vehicle.health < state.LastHealth)
-                        {
-                            int damageTaken = state.LastHealth - vehicle.health;
-                            Rocket.Core.Logging.Logger.Log($"[DAMAGE] Техника {vehicle.id} получила {damageTaken} урона.");
+                            var vehicle = VehicleManager.vehicles[i];
                             
-                            ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
-                        }
+                            // 1. Строгая проверка на null и "смерть" техники
+                            if (vehicle == null || vehicle.asset == null || vehicle.isExploded || vehicle.isDead) 
+                                continue;
+                            
+                            // 2. Безопасное получение ID из ассета
+                            ushort currentId = vehicle.asset.id;
+                            
+                            // 3. Проверка на нахождение в списке
+                            if (allowedIds == null || !allowedIds.Contains(currentId)) 
+                            {
+                                if (TrackedVehicles.ContainsKey(vehicle.instanceID))
+                                {
+                                    TrackedVehicles.Remove(vehicle.instanceID);
+                                    Logger.Log($"[DEBUG] Техника {vehicle.asset.name} ({currentId}) исключена (не в списке).");
+                                }
+                                continue;
+                            }
 
-                        // Синхронизация состояний
-                        if (state.IsStunned)
+                            // 4. Получаем состояние (гарантированно нужная машина)
+                            VehicleState state = GetVehicleState(vehicle);
+
+                            // 5. Детекция урона
+                            if (vehicle.health < state.LastHealth)
+                            {
+                                int damageTaken = state.LastHealth - vehicle.health;
+                                Logger.Log($"[DAMAGE] Урон по {vehicle.asset.name} ({currentId}): {damageTaken} ед. HP: {vehicle.health}/{vehicle.asset.health}");
+                                
+                                ModuleDamageHandler.ProcessDamage(vehicle, state, damageTaken);
+                            }
+                            // 6. Детекция ручной починки (Горелкой)
+                            else if (vehicle.health > state.LastHealth)
+                            {
+                                Logger.Log($"[REPAIR] Техника {vehicle.asset.name} починена: +{vehicle.health - state.LastHealth} HP.");
+                            }
+
+                            // 7. Применение активных эффектов (Контузия / Трансмиссия)
+                            if (state.IsStunned)
+                            {
+                                var rb = vehicle.GetComponent<Rigidbody>();
+                                if (rb != null) { rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero; }
+                            }
+
+                            if (state.IsTransmissionBroken && vehicle.batteryCharge > 0)
+                            {
+                                vehicle.batteryCharge = 0;
+                                VehicleManager.sendVehicleBatteryCharge(vehicle, 0);
+                            }
+
+                            // 8. Сохраняем актуальное здоровье для следующего тика
+                            state.LastHealth = vehicle.health;
+                        }
+                        catch (Exception innerEx)
                         {
-                            var rb = vehicle.GetComponent<Rigidbody>();
-                            if (rb != null) { rb.velocity = Vector3.zero; rb.angularVelocity = Vector3.zero; }
+                            Logger.LogError($"[WATCHER] Ошибка обработки конкретной машины: {innerEx.Message}");
                         }
-
-                        if (state.IsTransmissionBroken && vehicle.batteryCharge > 0)
-                        {
-                            vehicle.batteryCharge = 0;
-                            VehicleManager.sendVehicleBatteryCharge(vehicle, 0);
-                        }
-
-                        state.LastHealth = vehicle.health;
                     }
                 }
-                catch (Exception ex)
+                catch (Exception outerEx)
                 {
-                    // Если случилась ошибка внутри цикла, мы её увидим, но цикл не прервется
-                    Rocket.Core.Logging.Logger.LogError($"[WATCHER ERROR] {ex.Message}");
+                    Logger.LogError($"[WATCHER ERROR] Глобальная ошибка цикла: {outerEx.Message}");
                 }
 
                 CycleEnd:
