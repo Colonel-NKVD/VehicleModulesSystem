@@ -38,7 +38,7 @@ namespace VehicleModulesSystem
             }
 
             // Значения ID баррикады и радиуса желательно вынести в твой Config
-            ushort repairStationId = 287; // ЗАМЕНИ НА ID ТВОЕЙ БАРРИКАДЫ СТАНЦИИ
+            ushort repairStationId = 1248; // ЗАМЕНИ НА ID ТВОЕЙ БАРРИКАДЫ СТАНЦИИ
             float repairRadius = 15.0f; // Радиус ауры починки
 
             if (!ModuleDamageHandler.IsNearRepairStation(v.transform.position, repairStationId, repairRadius))
