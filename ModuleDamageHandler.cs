@@ -285,7 +285,7 @@ namespace VehicleModulesSystem
                         v.transform.forward * Random.Range(-3.5f, 3.5f) +   
                         Vector3.up * Random.Range(1.8f, 3.0f);              
 
-                    EffectManager.sendEffect(139, 128, v.transform.position + randomOffset);
+                    EffectManager.sendEffect(21619, 128, v.transform.position + randomOffset);
                 }
 
                 VehicleManager.damage(v, 130, 1, false);
@@ -310,7 +310,7 @@ namespace VehicleModulesSystem
         {
             if (v == null || v.isExploded) return;
             
-            EffectManager.sendEffect(45, 128, v.transform.position + Vector3.up * 2f);
+            EffectManager.sendEffect(21548, 128, v.transform.position + Vector3.up * 2f);
             SendChat(v, "!!! РАЗРЫВ КАЗЕННИКА !!!", Color.red);
             
             VehicleManager.damage(v, 1000, 1, false);
