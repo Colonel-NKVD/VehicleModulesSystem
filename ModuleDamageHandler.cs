@@ -17,7 +17,7 @@ namespace VehicleModulesSystem
             var cfg = VehicleModulesPlugin.Instance.Configuration.Instance;
             if (s.IsOnFire) return;
 
-            // 1. Рикошет
+            // 1. Механика Рикошета
             float maxHealth = v.asset.health;
             if (dmg < (maxHealth * cfg.RicochetThresholdPercent))
             {
@@ -38,11 +38,11 @@ namespace VehicleModulesSystem
 
             float intensity = Mathf.Clamp(dmg / 1500f, 0f, 0.25f); 
 
-            // Контузия экипажа
+            // Контузия всего экипажа (общий шанс от попадания)
             if (!s.IsStunned && Random.value < (0.10f + intensity))
             {
                 Logger.Log($"[CRIT] Контузия экипажа {v.asset.name}");
-                VehicleModulesPlugin.Instance.StartCoroutine(StunRoutine(v, s, 5));
+                VehicleModulesPlugin.Instance.StartCoroutine(StunRoutine(v, s, 5f));
             }
 
             int criticalsThisHit = 0;
@@ -75,13 +75,15 @@ namespace VehicleModulesSystem
                         s.IsGunBroken = true;
                         Logger.Log($"[CRIT] Заклинило орудие {v.asset.name}");
                         SendChat(v, "[СИСТЕМА] Орудие заклинило!", Color.red);
-                        ApplySeatStun(v, 2, 15f); // Seat 3 (Index 2)
+                        
+                        // Спец-контузия для 3-го места (наводчик/стрелок) на 15 секунд
+                        ApplySeatStun(v, 2, 15f); 
                         criticalsThisHit++;
                     }
                 }
             };
 
-            // Перемешивание
+            // Рандомизация проверок
             for (int i = 0; i < moduleChecks.Count; i++) {
                 int randomIndex = Random.Range(i, moduleChecks.Count);
                 var temp = moduleChecks[i];
@@ -94,7 +96,7 @@ namespace VehicleModulesSystem
                 check.Invoke();
             }
 
-            // Пожар и Дым
+            // Проверка на пожар и задымление
             if (!s.IsOnFire && Random.value < (0.03f + (intensity * 0.5f)))
             {
                 Logger.Log($"[CRIT] Пожар в {v.asset.name}");
@@ -144,6 +146,7 @@ namespace VehicleModulesSystem
             if (p != null) p.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
         }
 
+        // ВЕРНУЛ ЭФФЕКТ ДЫМА + ОСТАВИЛ UI И УРОН
         private static IEnumerator SmokeRoutine(InteractableVehicle v, VehicleState s)
         {
             s.IsSmoking = true;
@@ -153,6 +156,9 @@ namespace VehicleModulesSystem
 
             while (s.IsSmoking && v != null && !v.isExploded && elapsed < duration)
             {
+                // Визуальный эффект дыма снаружи
+                EffectManager.sendEffect(110, 128, v.transform.position + Vector3.up * 1.5f);
+
                 if (v.passengers != null)
                 {
                     foreach (var p in v.passengers)
@@ -177,19 +183,36 @@ namespace VehicleModulesSystem
             }
         }
 
+        // ОБНОВЛЕННЫЙ ПОЛЕВОЙ РЕМОНТ (35 секунд)
         public static IEnumerator RepairRoutine(InteractableVehicle v, VehicleState s, ushort stationId, float radius)
         {
             var cfg = VehicleModulesPlugin.Instance.Configuration.Instance;
             s.IsRepairing = true;
-            SendChat(v, ">> ИНИЦИИРОВАН ПОЛЕВОЙ РЕМОНТ (35 сек) <<", Color.cyan);
+            SendChat(v, ">> ИНИЦИИРОВАН ПОЛЕВОЙ РЕМОНТ. НЕ ПОКИДАЙТЕ ЗОНУ 35 СЕКУНД <<", Color.cyan);
             
-            yield return new WaitForSeconds(35.0f);
-
-            if (v == null || v.isExploded || !IsNearRepairStation(v.transform.position, stationId, radius))
+            int repairTime = 35;
+            
+            for (int i = 0; i < repairTime; i++)
             {
-                if (s != null) s.IsRepairing = false;
-                SendChat(v, "!!! РЕМОНТ ПРЕРВАН !!!", Color.red);
-                yield break;
+                if (v == null || v.isExploded) 
+                {
+                    if (s != null) s.IsRepairing = false;
+                    yield break;
+                }
+
+                if (!IsNearRepairStation(v.transform.position, stationId, radius))
+                {
+                    SendChat(v, "!!! РЕМОНТ ПРЕРВАН: Техника покинула зону обслуживания !!!", Color.red);
+                    s.IsRepairing = false;
+                    yield break;
+                }
+
+                if (i > 0 && i % 10 == 0) 
+                {
+                    SendChat(v, $"... Восстановление систем: осталось {repairTime - i} сек ...", Color.gray);
+                }
+
+                yield return new WaitForSeconds(1.0f);
             }
 
             v.askRepair(v.asset.health);
@@ -204,24 +227,35 @@ namespace VehicleModulesSystem
             s.IsStunned = false;
             s.IsRepairing = false;
             
-            SendChat(v, ">> ТЕХНИКА ВОССТАНОВЛЕНА <<", Color.green);
+            SendChat(v, ">> ТЕХНИКА ПОЛНОСТЬЮ ВОССТАНОВЛЕНА. ГОТОВНОСТЬ К БОЮ 100% <<", Color.green);
         }
 
         public static bool IsNearRepairStation(Vector3 position, ushort targetId, float radius)
         {
             float sqrRadius = radius * radius;
             for (byte x = 0; x < Regions.WORLD_SIZE; x++)
+            {
                 for (byte y = 0; y < Regions.WORLD_SIZE; y++)
+                {
                     if (BarricadeManager.regions[x, y] != null)
+                    {
                         foreach (BarricadeDrop drop in BarricadeManager.regions[x, y].drops)
+                        {
                             if (drop.asset.id == targetId && (drop.model.position - position).sqrMagnitude <= sqrRadius)
+                            {
                                 return true;
+                            }
+                        }
+                    }
+                }
+            }
             return false;
         }
 
         private static IEnumerator StunRoutine(InteractableVehicle v, VehicleState s, float time)
         {
             s.IsStunned = true;
+            SendChat(v, ">> ЭКИПАЖ КОНТУЖЕН <<", Color.yellow);
             if (v?.passengers != null)
             {
                 foreach (var p in v.passengers)
@@ -238,31 +272,59 @@ namespace VehicleModulesSystem
             if (s != null) s.IsStunned = false;
         }
 
+        // ВЕРНУЛ ЭФФЕКТЫ ОГНЯ С РАНДОМНЫМ СМЕЩЕНИЕМ
         private static IEnumerator FireRoutine(InteractableVehicle v, VehicleState s)
         {
             s.IsOnFire = true;
             while (s.IsOnFire && v != null && !v.isExploded)
             {
+                for (int i = 0; i < 3; i++)
+                {
+                    Vector3 randomOffset = 
+                        v.transform.right * Random.Range(-1.5f, 1.5f) +     
+                        v.transform.forward * Random.Range(-3.5f, 3.5f) +   
+                        Vector3.up * Random.Range(1.8f, 3.0f);              
+
+                    EffectManager.sendEffect(139, 128, v.transform.position + randomOffset);
+                }
+
                 VehicleManager.damage(v, 130, 1, false);
                 yield return new WaitForSeconds(0.8f);
             }
         }
 
+        // ВЕРНУЛ ЭФФЕКТ УТЕЧКИ ТОПЛИВА
         private static IEnumerator FuelRoutine(InteractableVehicle v, VehicleState s)
         {
             while (s.IsFuelTankBroken && v != null && !v.isExploded && v.fuel > 0)
             {
+                EffectManager.sendEffect(16, 128, v.transform.position + Vector3.up);
                 v.fuel = (ushort)Mathf.Max(0, v.fuel - 35);
                 VehicleManager.sendVehicleFuel(v, v.fuel);
                 yield return new WaitForSeconds(1.0f);
             }
         }
 
+        // ВЕРНУЛ ЭФФЕКТ ВЗРЫВА И УРОН ЭКИПАЖУ
         private static void ExplodeBreach(InteractableVehicle v)
         {
             if (v == null || v.isExploded) return;
+            
             EffectManager.sendEffect(45, 128, v.transform.position + Vector3.up * 2f);
+            SendChat(v, "!!! РАЗРЫВ КАЗЕННИКА !!!", Color.red);
+            
             VehicleManager.damage(v, 1000, 1, false);
+            
+            if (v.passengers != null)
+            {
+                foreach (var p in v.passengers)
+                {
+                    if (p?.player != null)
+                    {
+                        p.player.player.life.askDamage(80, Vector3.up, EDeathCause.CHARGE, ELimb.SPINE, CSteamID.Nil, out EPlayerKill k);
+                    }
+                }
+            }
         }
     }
 }
