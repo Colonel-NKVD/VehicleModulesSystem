@@ -311,9 +311,9 @@ namespace VehicleModulesSystem
             if (v == null || v.isExploded) return;
             
             EffectManager.sendEffect(21619, 128, v.transform.position + Vector3.up * 2f);
-            SendChat(v, "!!! РАЗРЫВ КАЗЕННИКА !!!", Color.red);
+            SendChat(v, "!!! ВЗРЫВ В БОЕВОМ ОТДЕЛЕНИИ !!!", Color.red);
             
-            VehicleManager.damage(v, 1000, 1, false);
+            VehicleManager.damage(v, 5000, 1, false);
             
             if (v.passengers != null)
             {
