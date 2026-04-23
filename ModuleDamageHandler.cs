@@ -17,7 +17,7 @@ namespace VehicleModulesSystem
             var cfg = VehicleModulesPlugin.Instance.Configuration.Instance;
             if (s.IsOnFire) return;
 
-            // 1. Механика Рикошета
+            // 1. Механика Рикошета (Откат урона)
             float maxHealth = v.asset.health;
             if (dmg < (maxHealth * cfg.RicochetThresholdPercent))
             {
@@ -25,6 +25,11 @@ namespace VehicleModulesSystem
                 {
                     Logger.Log($"[HIT] Рикошет по {v.asset.name} (урон {dmg})");
                     SendChat(v, ">>> РИКОШЕТ / БРОНЯ НЕ ПРОБИТА <<<", Color.white);
+                    
+                    // ВОССТАНАВЛИВАЕМ ХП (Откатываем урон, так как он уже прошел в движке)
+                    v.askRepair((ushort)dmg);
+                    VehicleManager.sendVehicleHealth(v, v.health);
+                    
                     return; 
                 }
             }
@@ -146,19 +151,29 @@ namespace VehicleModulesSystem
             if (p != null) p.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
         }
 
-        // ВЕРНУЛ ЭФФЕКТ ДЫМА + ОСТАВИЛ UI И УРОН
+        // // НОВАЯ ЛОГИКА: UI во время задымления, ФИЗИЧЕСКИЙ ДЫМ при проветривании
         private static IEnumerator SmokeRoutine(InteractableVehicle v, VehicleState s)
         {
             s.IsSmoking = true;
             var cfg = VehicleModulesPlugin.Instance.Configuration.Instance;
-            int duration = 15;
+            int duration = 15; // Длительность внутреннего задымления
             int elapsed = 0;
 
+            // 1. ВКЛЮЧАЕМ UI (Дым в глаза экипажу) в самом начале
+            if (v != null && v.passengers != null)
+            {
+                foreach (var p in v.passengers)
+                {
+                    if (p?.player != null)
+                    {
+                        EffectManager.sendUIEffect(cfg.SmokeUIEffectID, 12345, p.player.playerID.steamID, true);
+                    }
+                }
+            }
+
+            // 2. ЦИКЛ УРОНА (Снаружи эффектов нет, только UI у игроков)
             while (s.IsSmoking && v != null && !v.isExploded && elapsed < duration)
             {
-                // Визуальный эффект дыма снаружи
-                EffectManager.sendEffect(36010, 128, v.transform.position + Vector3.up * 1.5f);
-
                 if (v.passengers != null)
                 {
                     foreach (var p in v.passengers)
@@ -166,7 +181,6 @@ namespace VehicleModulesSystem
                         if (p?.player != null)
                         {
                             p.player.player.life.askDamage(2, Vector3.up, EDeathCause.BREATH, ELimb.SPINE, CSteamID.Nil, out EPlayerKill kill);
-                            EffectManager.sendUIEffect(cfg.SmokeUIEffectID, 12345, p.player.playerID.steamID, true);
                         }
                     }
                 }
@@ -175,10 +189,31 @@ namespace VehicleModulesSystem
             }
             
             s.IsSmoking = false;
+            
+            // 3. ПРОВЕТРИВАНИЕ (Убираем UI и пускаем физический дым на 3 сек)
             if (v != null && !v.isExploded && v.passengers != null)
             {
+                // Убираем UI эффект задымления
                 foreach (var p in v.passengers)
-                    if (p?.player != null) EffectManager.askEffectClearByID(cfg.SmokeUIEffectID, p.player.playerID.steamID);
+                {
+                    if (p?.player != null)
+                    {
+                        EffectManager.askEffectClearByID(cfg.SmokeUIEffectID, p.player.playerID.steamID);
+                    }
+                }
+
+                SendChat(v, "[СИСТЕМА] Экипаж открыл люки для проветривания...", Color.green);
+                
+                // Воспроизводим эффект дыма снаружи только сейчас (3 секунды)
+                float smokeTimer = 0;
+                while (smokeTimer < 3.0f && v != null && !v.isExploded)
+                {
+                    // Эффект 36010 (или твой ID дыма)
+                    EffectManager.sendEffect(36010, 128, v.transform.position + Vector3.up * 1.5f);
+                    yield return new WaitForSeconds(0.6f); // Частота появления частиц дыма
+                    smokeTimer += 0.6f;
+                }
+
                 SendChat(v, "[СИСТЕМА] Боевое отделение проветрено.", Color.green);
             }
         }
@@ -217,6 +252,10 @@ namespace VehicleModulesSystem
 
             v.askRepair(v.asset.health);
             VehicleManager.sendVehicleHealth(v, v.health);
+            
+            // НОВОЕ: Устанавливаем новый аккумулятор (10000 - максимальный заряд в Unturned)
+            v.batteryCharge = 10000;
+            VehicleManager.sendVehicleBatteryCharge(v, 10000);
             
             if (cfg.RepairFixesTransmission) s.IsTransmissionBroken = false;
 
