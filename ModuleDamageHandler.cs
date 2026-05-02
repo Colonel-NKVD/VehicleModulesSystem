@@ -130,7 +130,7 @@ namespace VehicleModulesSystem
         {
             if (v?.passengers == null) return;
             foreach (var p in v.passengers)
-                if (p?.player != null) UnturnedChat.Say(p.player.playerID.steamID, msg, c);
+                if (p?.player?.playerID != null) UnturnedChat.Say(p.player.playerID.steamID, msg, c);
         }
 
         private static void ApplySeatStun(InteractableVehicle v, int seatIndex, float duration)
@@ -138,8 +138,11 @@ namespace VehicleModulesSystem
             if (v?.passengers != null && v.passengers.Length > seatIndex && v.passengers[seatIndex].player != null)
             {
                 var p = v.passengers[seatIndex].player;
-                UnturnedChat.Say(p.playerID.steamID, ">> ВАС КОНТУЗИЛО ПРИ ПОВРЕЖДЕНИИ КАЗЕННИКА! <<", Color.yellow);
-                VehicleModulesPlugin.Instance.StartCoroutine(SinglePlayerStun(p.player, duration));
+                if (p?.playerID != null)
+                {
+                    UnturnedChat.Say(p.playerID.steamID, ">> ВАС КОНТУЗИЛО ПРИ ПОВРЕЖДЕНИИ КАЗЕННИКА! <<", Color.yellow);
+                    VehicleModulesPlugin.Instance.StartCoroutine(SinglePlayerStun(p.player, duration));
+                }
             }
         }
 
@@ -151,7 +154,7 @@ namespace VehicleModulesSystem
             if (p != null) p.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
         }
 
-        // // НОВАЯ ЛОГИКА: UI во время задымления, ФИЗИЧЕСКИЙ ДЫМ при проветривании
+        // НОВАЯ ЛОГИКА: UI во время задымления, ФИЗИЧЕСКИЙ ДЫМ при проветривании
         private static IEnumerator SmokeRoutine(InteractableVehicle v, VehicleState s)
         {
             s.IsSmoking = true;
@@ -164,7 +167,7 @@ namespace VehicleModulesSystem
             {
                 foreach (var p in v.passengers)
                 {
-                    if (p?.player != null)
+                    if (p?.player?.playerID != null)
                     {
                         EffectManager.sendUIEffect(cfg.SmokeUIEffectID, 12345, p.player.playerID.steamID, true);
                     }
@@ -178,7 +181,8 @@ namespace VehicleModulesSystem
                 {
                     foreach (var p in v.passengers)
                     {
-                        if (p?.player != null)
+                        // Защита от NRE при выходе игрока с сервера
+                        if (p?.player?.player?.life != null) 
                         {
                             p.player.player.life.askDamage(2, Vector3.up, EDeathCause.BREATH, ELimb.SPINE, CSteamID.Nil, out EPlayerKill kill);
                         }
@@ -196,7 +200,7 @@ namespace VehicleModulesSystem
                 // Убираем UI эффект задымления
                 foreach (var p in v.passengers)
                 {
-                    if (p?.player != null)
+                    if (p?.player?.playerID != null)
                     {
                         EffectManager.askEffectClearByID(cfg.SmokeUIEffectID, p.player.playerID.steamID);
                     }
@@ -208,9 +212,8 @@ namespace VehicleModulesSystem
                 float smokeTimer = 0;
                 while (smokeTimer < 3.0f && v != null && !v.isExploded)
                 {
-                    // Эффект 36010 (или твой ID дыма)
                     EffectManager.sendEffect(36010, 128, v.transform.position + Vector3.up * 1.5f);
-                    yield return new WaitForSeconds(0.6f); // Частота появления частиц дыма
+                    yield return new WaitForSeconds(0.6f); 
                     smokeTimer += 0.6f;
                 }
 
@@ -218,7 +221,7 @@ namespace VehicleModulesSystem
             }
         }
 
-        // ОБНОВЛЕННЫЙ ПОЛЕВОЙ РЕМОНТ (35 секунд)
+        // ОБНОВЛЕННЫЙ ПОЛЕВОЙ РЕМОНТ (35 секунд + Оптимизация радара)
         public static IEnumerator RepairRoutine(InteractableVehicle v, VehicleState s, ushort stationId, float radius)
         {
             var cfg = VehicleModulesPlugin.Instance.Configuration.Instance;
@@ -235,11 +238,15 @@ namespace VehicleModulesSystem
                     yield break;
                 }
 
-                if (!IsNearRepairStation(v.transform.position, stationId, radius))
+                // ОПТИМИЗАЦИЯ: Сканируем регионы только раз в 2 секунды
+                if (i % 2 == 0)
                 {
-                    SendChat(v, "!!! РЕМОНТ ПРЕРВАН: Техника покинула зону обслуживания !!!", Color.red);
-                    s.IsRepairing = false;
-                    yield break;
+                    if (!IsNearRepairStation(v.transform.position, stationId, radius))
+                    {
+                        SendChat(v, "!!! РЕМОНТ ПРЕРВАН: Техника покинула зону обслуживания !!!", Color.red);
+                        s.IsRepairing = false;
+                        yield break;
+                    }
                 }
 
                 if (i > 0 && i % 10 == 0) 
@@ -253,7 +260,6 @@ namespace VehicleModulesSystem
             v.askRepair(v.asset.health);
             VehicleManager.sendVehicleHealth(v, v.health);
             
-            // НОВОЕ: Устанавливаем новый аккумулятор (10000 - максимальный заряд в Unturned)
             v.batteryCharge = 10000;
             VehicleManager.sendVehicleBatteryCharge(v, 10000);
             
@@ -269,20 +275,29 @@ namespace VehicleModulesSystem
             SendChat(v, ">> ТЕХНИКА ПОЛНОСТЬЮ ВОССТАНОВЛЕНА. ГОТОВНОСТЬ К БОЮ 100% <<", Color.green);
         }
 
+        // ОПТИМИЗИРОВАННЫЙ ПОИСК СТАНЦИЙ (Проверка 9 регионов вместо ~4000)
         public static bool IsNearRepairStation(Vector3 position, ushort targetId, float radius)
         {
             float sqrRadius = radius * radius;
-            for (byte x = 0; x < Regions.WORLD_SIZE; x++)
+            
+            if (!Regions.tryGetCoordinate(position, out byte currentX, out byte currentY)) 
+                return false; 
+
+            for (int x = currentX - 1; x <= currentX + 1; x++)
             {
-                for (byte y = 0; y < Regions.WORLD_SIZE; y++)
+                for (int y = currentY - 1; y <= currentY + 1; y++)
                 {
-                    if (BarricadeManager.regions[x, y] != null)
+                    if (x >= 0 && x < Regions.WORLD_SIZE && y >= 0 && y < Regions.WORLD_SIZE)
                     {
-                        foreach (BarricadeDrop drop in BarricadeManager.regions[x, y].drops)
+                        var region = BarricadeManager.regions[x, y];
+                        if (region != null && region.drops != null)
                         {
-                            if (drop.asset.id == targetId && (drop.model.position - position).sqrMagnitude <= sqrRadius)
+                            foreach (BarricadeDrop drop in region.drops)
                             {
-                                return true;
+                                if (drop.asset.id == targetId && (drop.model.position - position).sqrMagnitude <= sqrRadius)
+                                {
+                                    return true;
+                                }
                             }
                         }
                     }
@@ -298,7 +313,7 @@ namespace VehicleModulesSystem
             if (v?.passengers != null)
             {
                 foreach (var p in v.passengers)
-                    if (p?.player != null) p.player.player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, true);
+                    if (p?.player?.player != null) p.player.player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, true);
             }
             
             yield return new WaitForSeconds(time);
@@ -306,12 +321,11 @@ namespace VehicleModulesSystem
             if (v != null && !v.isExploded && v.passengers != null)
             {
                 foreach (var p in v.passengers)
-                    if (p?.player != null) p.player.player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
+                    if (p?.player?.player != null) p.player.player.setPluginWidgetFlag(EPluginWidgetFlags.Modal, false);
             }
             if (s != null) s.IsStunned = false;
         }
 
-        // ВЕРНУЛ ЭФФЕКТЫ ОГНЯ С РАНДОМНЫМ СМЕЩЕНИЕМ
         private static IEnumerator FireRoutine(InteractableVehicle v, VehicleState s)
         {
             s.IsOnFire = true;
@@ -332,7 +346,6 @@ namespace VehicleModulesSystem
             }
         }
 
-        // ВЕРНУЛ ЭФФЕКТ УТЕЧКИ ТОПЛИВА
         private static IEnumerator FuelRoutine(InteractableVehicle v, VehicleState s)
         {
             while (s.IsFuelTankBroken && v != null && !v.isExploded && v.fuel > 0)
@@ -344,7 +357,6 @@ namespace VehicleModulesSystem
             }
         }
 
-        // ВЕРНУЛ ЭФФЕКТ ВЗРЫВА И УРОН ЭКИПАЖУ
         private static void ExplodeBreach(InteractableVehicle v)
         {
             if (v == null || v.isExploded) return;
@@ -358,7 +370,8 @@ namespace VehicleModulesSystem
             {
                 foreach (var p in v.passengers)
                 {
-                    if (p?.player != null)
+                    // Защита от NRE при смерти/отключении
+                    if (p?.player?.player?.life != null) 
                     {
                         p.player.player.life.askDamage(80, Vector3.up, EDeathCause.CHARGE, ELimb.SPINE, CSteamID.Nil, out EPlayerKill k);
                     }
